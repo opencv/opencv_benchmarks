@@ -1,7 +1,7 @@
 import bpy
 from bpy_extras.object_utils import world_to_camera_view
 import random
-import time
+from math import pi
 
 
 def check_projection(cam, obj):
@@ -43,7 +43,7 @@ def check_projection(cam, obj):
 def set_position_origin(obj):
     obj.location.x = 0
     obj.location.y = 0
-    obj.location.z = 2
+    obj.location.z = 0
 
     obj.rotation_euler[0] = 0
     obj.rotation_euler[1] = 0
@@ -55,12 +55,12 @@ def set_position_origin(obj):
 c = bpy.data.objects['Camera']
 
 # Set camera intrincs
-c.lens_unit = 'MILLIMETERS'
-c.lens = 20 # focus length
+#c.lens_unit = 'MILLIMETERS'
+#c.lens = 20 # focus length
 
 # Set camera position
 set_position_origin(c)
-c.location.z = 1
+c.location.z = 0.5
 
 
 # Set pattern init position
@@ -68,7 +68,7 @@ p = bpy.data.objects['checkerboard']
 
 set_position_origin(p)
 
-N = 30 # Number of genrated images
+N = 50 # Number of genrated images
 n = 0
 i = 0
 
@@ -76,20 +76,20 @@ random.seed(1)
 
 while n < N and i < 1000:
     # Set position
-    p.location.x = random.uniform(-0.4, 0.4)
-    p.location.y = random.uniform(-0.4, 0.4)
-    p.location.z = random.uniform(-0.2, 0.2)
+    p.location.x = random.uniform(-0.3, 0.3)
+    p.location.y = random.uniform(-0.2, 0.2)
+    p.location.z = random.uniform(-0.1, 0.1)
     
     # Set rotation
-    p.rotation_euler[0] = random.uniform(0, 0.5)
-    p.rotation_euler[1] = random.uniform(0, 0.5)
-    p.rotation_euler[2] = random.uniform(0, 0.5)
+    p.rotation_euler[0] = random.uniform(-0.1, 0.1)
+    p.rotation_euler[1] = random.uniform(-0.1, 0.1)
+    p.rotation_euler[2] = random.uniform(0.7 * pi/2, 1.3 * pi/2)
     
     # Update matrices
     bpy.context.view_layer.update()
     
     # Debug
-    print('>',i,'<')
+    print('>', i, ' ' , n, '<')
     print(p.location)
     print(p.rotation_euler)
     
