@@ -12,6 +12,7 @@
 #include <cstring>
 #include <ctime>
 #include <iostream>
+#include <fstream>
 
 using namespace cv;
 using namespace std;
@@ -26,7 +27,8 @@ enum Pattern
 {
     CHESSBOARD,
     CIRCLES_GRID,
-    ASYMMETRIC_CIRCLES_GRID
+    ASYMMETRIC_CIRCLES_GRID,
+    RADON
 };
 
 static bool readStringList(const string& filename, vector<string>& l);
@@ -122,6 +124,8 @@ int main(int argc, char** argv)
             pattern = ASYMMETRIC_CIRCLES_GRID;
         else if (val == "chessboard")
             pattern = CHESSBOARD;
+        else if (val == "radon")
+            pattern = RADON;
         else
             return fprintf(stderr, "Invalid pattern type: must be chessboard or circles\n"), -1;
     }
@@ -244,6 +248,9 @@ int main(int argc, char** argv)
                 break;
             case ASYMMETRIC_CIRCLES_GRID:
                 found = findCirclesGrid(view, boardSize, pointbuf, CALIB_CB_ASYMMETRIC_GRID);
+                break;
+            case RADON:
+                found = findChessboardCornersSB(view, boardSize, pointbuf);
                 break;
             default:
                 return fprintf(stderr, "Unknown pattern type\n"), -1;
@@ -455,7 +462,29 @@ double computeReprojectionErrors(const vector<vector<Point3f>>& objectPoints,
 
     return std::sqrt(totalErr / totalPoints);
 }
+
 bool readStringList(const string& filename, vector<string>& l)
+{
+    l.clear();
+
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        return false;
+    }
+
+    std::string line;
+    while (std::getline(file, line)) {
+       l.push_back(line);
+    }
+
+    if (l.empty()) {
+        return false;
+    } else {
+        return true;
+    }
+}
+
+bool readStringListXml(const string& filename, vector<string>& l)
 {
     l.resize(0);
     FileStorage fs(filename, FileStorage::READ);
@@ -497,6 +526,7 @@ void calcChessboardCorners(Size boardSize, float squareSize, vector<Point3f>& co
     {
         case CHESSBOARD:
         case CIRCLES_GRID:
+        case RADON:
             for (int i = 0; i < boardSize.height; i++)
                 for (int j = 0; j < boardSize.width; j++)
                     corners.emplace_back(float(j * squareSize), float(i * squareSize), 0);
@@ -544,8 +574,10 @@ bool runCalibration(const vector<vector<Point2f>>& imagePoints, Size imageSize, 
     rms = calibrateCamera(objectPoints, imagePoints, imageSize,
                           cameraMatrix, distCoeffs, rvecs,tvecs,
                           stdIntr, stdExtr, pve,
-                          flags | CALIB_FIX_K1 | CALIB_FIX_K2 | CALIB_FIX_K3, tc);
+                          //flags | CALIB_FIX_K1 | CALIB_FIX_K2 | CALIB_FIX_K3, tc);
+                       flags | CALIB_FIX_K3, tc);
     printf("RMS error reported by calibrateCamera: %g\n", rms);
+    std::cout << "stdIntr" << std::endl;
     std::cout << stdIntr << std::endl;
     //std::cout << stdExtr << std::endl;
 

@@ -64,25 +64,31 @@ c.location.z = 0.5
 
 
 # Set pattern init position
-p = bpy.data.objects['checkerboard']
+bpy.data.objects['checkerboard'].locaition.z = 10
+bpy.data.objects['circles'].location.z = 10
+bpy.data.objects['radon'].location.z = 10
 
-set_position_origin(p)
 
+
+pattern = 'radon'
 N = 50 # Number of genrated images
 n = 0
 i = 0
 
+p = bpy.data.objects[pattern]
+set_position_origin(p)
+
 random.seed(1)
 
-while n < N and i < 1000:
+while n < N and i < 100000:
     # Set position
     p.location.x = random.uniform(-0.3, 0.3)
     p.location.y = random.uniform(-0.2, 0.2)
-    p.location.z = random.uniform(-0.1, 0.1)
+    p.location.z = random.uniform(0, 0.15)
     
     # Set rotation
-    p.rotation_euler[0] = random.uniform(-0.1, 0.1)
-    p.rotation_euler[1] = random.uniform(-0.1, 0.1)
+    p.rotation_euler[0] = random.uniform(-0.4, 0.4)
+    p.rotation_euler[1] = random.uniform(-0.4, 0.4)
     p.rotation_euler[2] = random.uniform(0.7 * pi/2, 1.3 * pi/2)
     
     # Update matrices
