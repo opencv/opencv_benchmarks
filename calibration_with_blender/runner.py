@@ -35,21 +35,30 @@ if __name__ == '__main__':
     pathlib.Path(distorted_dir).mkdir(parents=True, exist_ok=True)
     pathlib.Path(result_dir).mkdir(parents=True, exist_ok=True)
 
-
     result = {}
-    N = 10
+    N = 3
     for i in range(N):
-        d1 = random.uniform(-0.3, 0)
-        d2 = random.uniform(-0.1, 0)
+        image_number = 50
+        k1 = random.uniform(-0.3, 0)
+        k2 = random.uniform(-0.1, 0)
+        p1 = random.uniform(-0.3, 0.3)
+        p2 = random.uniform(-0.1, 0.1)
+        k3 = random.uniform(-0.01, 0)
 
         clear_dir(distorted_dir)
         # Distort images and update info
+        k = 0
         for entry in os.listdir(dataset_path):
             entry_path = os.path.join(dataset_path, entry)
             if os.path.isfile(entry_path):
                 if entry != 'info.json':
-                    subprocess.run([image_distort_path, entry_path, 'pinhole', '1067', '1067', '0', '0', str(d1), str(d2),
-                                    distorted_dir])
+                    if k >= image_number:
+                        break
+                    subprocess.run(
+                        [image_distort_path, entry_path, 'pinhole', '1067', '1067', '0', '0', str(k1), str(k2), str(p1),
+                         str(p2), str(k3),
+                         distorted_dir])
+                    k += 1
                 else:
                     # with open(entry_path, 'r') as file:
                     #     info = json.load(file)
@@ -74,6 +83,6 @@ if __name__ == '__main__':
             [calibration_benchmark_path, '-w=13', '-h=18', '-s=1', '-op', '-o={}'.format(calibration_result_path),
              image_list_path])
 
-        result[result_filename] = {'d': [d1, d2]}
+        result[result_filename] = {'d': [k1, k2, p1, p2, k3]}
         with open(os.path.join(result_dir, 'result.yml'), 'w') as result_file:
             yaml.dump(result, result_file, default_flow_style=False)

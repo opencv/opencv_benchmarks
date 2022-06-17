@@ -22,6 +22,6 @@ if __name__ == '__main__':
 
             D = camera_file.getNode('distortion_coefficients').mat()
             d1_errors.append(data[entry]['d'][0] - D[0])
-    #sns.distplot(errors)
-    sns.distplot(d1_errors)
+    sns.distplot(errors)
+    #sns.distplot(d1_errors)
     plt.show()
