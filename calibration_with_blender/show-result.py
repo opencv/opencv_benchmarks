@@ -11,17 +11,26 @@ if __name__ == '__main__':
         data = yaml.safe_load(file)
         print(data)
 
-    errors = []
-    d1_errors = []
+    errors = {}
+    d1_errors = {}
     result_dir = os.path.join(data_dir, 'result')
     for entry in os.listdir(result_dir):
         if entry != 'result.yml':
             camera_file = cv.FileStorage(os.path.join(result_dir, entry), cv.FILE_STORAGE_READ)
             error = camera_file.getNode('avg_reprojection_error').real()
-            errors.append(error)
+            #errors.append(error)
+
+            n = data[entry]['n']
+            errors[n] = error
 
             D = camera_file.getNode('distortion_coefficients').mat()
-            d1_errors.append(data[entry]['d'][0] - D[0])
-    sns.distplot(errors)
+            d1_errors[n] = abs(data[entry]['d'][0] - D[0])
+    #sns.distplot(errors)
     #sns.distplot(d1_errors)
+    print(errors.keys())
+    print(errors.values())
+    #plt.plot(errors.keys(), errors.values())
+    errors = d1_errors
+    x, y = zip(*sorted(errors.items()))
+    plt.plot(x, y)
     plt.show()
