@@ -128,17 +128,19 @@ def read_output(path):
             decoded_info = image_info.getNode("decoded_info")
             if not decoded_info.empty():
                 for i in range(decoded_info.size()):
-                    print(decoded_info.at(i).string())
+                    # print(decoded_info.at(i).string())
+                    pass
 
 
 def main():
     # parse command line options
     parser = argparse.ArgumentParser(description="bench QR code dataset", add_help=False)
     parser.add_argument("-H", "--help", help="show help", action="store_true", dest="show_help")
-    parser.add_argument("-o", "--output", help="output file", default="test_out.yaml", action="store", dest="output")
+    parser.add_argument("-o", "--output", help="output file", default="test.yaml", action="store", dest="output")
     parser.add_argument("-p", "--path", help="input dataset path", default="qrcodes/detection", action="store",
                         dest="dataset_path")
-    parser.add_argument("-m", "--model", help="path to opencv_wechat model", default="./", action="store",
+    parser.add_argument("-m", "--model", help="path to opencv_wechat model (detect.prototxt, detect.caffemodel,"
+                        "sr.prototxt, sr.caffemodel), build opencv+contrib to get model", default="./", action="store",
                         dest="model_path")
     parser.add_argument("-a", "--accuracy", help="input accuracy", default="20", action="store", dest="accuracy",
                         type=int)
@@ -155,8 +157,6 @@ def main():
     model_path = args.model_path
     accuracy = args.accuracy
     algorithm = args.algorithm
-
-    #read_output(output)
 
     list_dirs = glob.glob(dataset_path + "/*")
     fs = cv.FileStorage(output, cv.FILE_STORAGE_WRITE)
@@ -211,27 +211,23 @@ def main():
     print(gl_detect / gl_count)
     print("decode", gl_decode / gl_count)
     detect_dict["total"] = {"nums": gl_count, "detected": gl_detect, "detected_prop": gl_detect / max(1, gl_count)}
+
     fs.startWriteStruct("category_detected", cv.FILE_NODE_MAP)
-    print(detect_dict)
     for category in detect_dict:
         fs.startWriteStruct(category, cv.FILE_NODE_MAP)
         fs.write("nums", detect_dict[category]["nums"])
         fs.write("detected", detect_dict[category]["detected"])
         fs.write("detected_prop", detect_dict[category]["detected_prop"])
-        print(detect_dict[category]["detected_prop"])
         fs.endWriteStruct()
-
     fs.endWriteStruct()
 
     decode_dict["total"] = {"nums": gl_count, "decoded": gl_decode, "decoded_prop": gl_decode / max(1, gl_count)}
     fs.startWriteStruct("category_decoded", cv.FILE_NODE_MAP)
-    print(decode_dict)
     for category in decode_dict:
         fs.startWriteStruct(category, cv.FILE_NODE_MAP)
         fs.write("nums", decode_dict[category]["nums"])
         fs.write("decoded", decode_dict[category]["decoded"])
         fs.write("decoded_prop", decode_dict[category]["decoded_prop"])
-        print(decode_dict[category]["decoded_prop"])
         fs.endWriteStruct()
     fs.endWriteStruct()
 
