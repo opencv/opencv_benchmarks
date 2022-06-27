@@ -99,29 +99,39 @@ def get_corners(label_path):
     return np.array(corners).reshape(-1, 4, 2)
 
 
-def get_distance(gold_corners, corners):
-    return abs(np.amax(gold_corners - corners))
+# l_1 - https://en.wikipedia.org/wiki/Norm_(mathematics)
+# l_inf - Chebyshev norm https://en.wikipedia.org/wiki/Chebyshev_distance
+TypeNorm = Enum('TypeNorm', 'l1 l_inf')
 
 
-def get_distance_to_rotate_qr(gold_corner, corners, accuracy):
+def get_norm(gold_corners, corners, type_dist):
+    if type_dist is TypeNorm.l1:
+        ar = np.sum(np.absolute(gold_corners - corners), 1)
+        return np.amax(ar)
+    if type_dist is TypeNorm.l_inf:
+        return abs(np.amax(gold_corners - corners))
+    raise TypeError("this TypeNorm isn't supported")
+
+
+def get_norm_to_rotate_qr(gold_corner, corners, accuracy, type_dist=TypeNorm.l_inf):
     corners = corners.reshape(-1, 4, 2)
     dist = 1e9
     for one_corners in corners:
-        dist = get_distance(gold_corner, one_corners)
+        dist = get_norm(gold_corner, one_corners, type_dist)
         if dist > accuracy:
             for i in range(0, 3):
                 if dist > accuracy:
                     one_corners = np.roll(one_corners, 1, 0)
-                    dist = min(dist, get_distance(gold_corner, one_corners))
+                    dist = min(dist, get_norm(gold_corner, one_corners, type_dist))
                 else:
                     return dist
         if dist > accuracy:
             one_corners = np.flip(one_corners, 0)
-            dist = min(dist, get_distance(gold_corner, one_corners))
+            dist = min(dist, get_norm(gold_corner, one_corners, type_dist))
             for i in range(0, 3):
                 if dist > accuracy:
                     one_corners = np.roll(one_corners, 1, 0)
-                    dist = min(dist, get_distance(gold_corner, one_corners))
+                    dist = min(dist, get_norm(gold_corner, one_corners, type_dist))
                 else:
                     return dist
     return dist
@@ -146,7 +156,7 @@ def main():
     # parse command line options
     parser = argparse.ArgumentParser(description="bench QR code dataset", add_help=False)
     parser.add_argument("-H", "--help", help="show help", action="store_true", dest="show_help")
-    parser.add_argument("-o", "--output", help="output file", default="test.yaml", action="store", dest="output")
+    parser.add_argument("-o", "--output", help="output file", default="out.yaml", action="store", dest="output")
     parser.add_argument("-p", "--path", help="input dataset path", default="qrcodes/detection", action="store",
                         dest="dataset_path")
     parser.add_argument("-m", "--model", help="path to opencv_wechat model (detect.prototxt, detect.caffemodel,"
@@ -204,7 +214,7 @@ def main():
                             qr_decode += 1
                 fs.write("decoded_info", decoded_info)
                 for one_gold_corners in gold_corners:
-                    dist = get_distance_to_rotate_qr(one_gold_corners, corners, accuracy)
+                    dist = get_norm_to_rotate_qr(one_gold_corners, corners, accuracy)
                     fs.write("dist_to_gold_corner_" + str(i), dist)
                     if dist <= accuracy:
                         qr_detect += 1
