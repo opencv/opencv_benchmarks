@@ -21,54 +21,64 @@ import cv2 as cv
 
 class DetectorQR:
     TypeDetector = Enum('TypeDetector', 'opencv opencv_wechat')
-    detected_corners = np.array([])
-    decoded_info = []
-    detector = None
-    type_detector = None
 
     def __init__(self, type_detector=TypeDetector.opencv, path_to_model="./"):
+        self.detected_corners = np.array([])
+        self.decoded_info = []
+        self.detector = None
+        self.type_detector = None
         self.type_detector = type_detector
-        if type_detector == self.TypeDetector.opencv:
-            self.detector = cv.QRCodeDetector()
-        elif type_detector == self.TypeDetector.opencv_wechat:
-            self.detector = cv.wechat_qrcode_WeChatQRCode(path_to_model + "detect.prototxt",
-                                                          path_to_model + "detect.caffemodel",
-                                                          path_to_model + "sr.prototxt",
-                                                          path_to_model + "sr.caffemodel")
-        else:
-            raise TypeError("this type_detector isn't supported")
+
+
+class CvObjDetector(DetectorQR):
+    def __init__(self, type_detector=DetectorQR.TypeDetector.opencv):
+        super().__init__(type_detector)
+        self.detector = cv.QRCodeDetector()
 
     def detect(self, image):
-        if self.type_detector == self.TypeDetector.opencv:
-            ret, corners = self.detector.detectMulti(image)
-            if ret is False:
-                return False, np.array([])
-            self.detected_corners = corners
-            return ret, corners
-        elif self.TypeDetector.opencv_wechat:
-            decoded_info, corners = self.detector.detectAndDecode(image)
-            if len(decoded_info) == 0:
-                return False, np.array([])
-            corners = np.array(corners).reshape(-1, 4, 2)
-            self.decoded_info = decoded_info
-            self.detected_corners = corners
-            return True, corners
-        else:
-            raise TypeError("this type_detector isn't supported")
+        ret, corners = self.detector.detectMulti(image)
+        if ret is False:
+            return False, np.array([])
+        self.detected_corners = corners
+        return ret, corners
 
     def decode(self, image):
-        if self.type_detector == self.TypeDetector.opencv:
-            if self.detected_corners.size == 0:
-                return 0, [], None
-            r, decoded_info, straight_qrcode = self.detector.decodeMulti(image, self.detected_corners)
-            self.decoded_info = decoded_info
-            return r, decoded_info, straight_qrcode
-        elif self.TypeDetector.opencv_wechat:
-            if len(self.decoded_info) == 0:
-                return 0, [], None
-            return True, self.decoded_info, self.detected_corners
-        else:
-            raise TypeError("this type_detector isn't supported")
+        if self.detected_corners.size == 0:
+            return 0, [], None
+        r, decoded_info, straight_qrcode = self.detector.decodeMulti(image, self.detected_corners)
+        self.decoded_info = decoded_info
+        return r, decoded_info, straight_qrcode
+
+
+class CvWechatDetector(DetectorQR):
+    def __init__(self, type_detector=DetectorQR.TypeDetector.opencv, path_to_model="./"):
+        super().__init__(type_detector)
+        self.detector = cv.wechat_qrcode_WeChatQRCode(path_to_model + "detect.prototxt",
+                                                      path_to_model + "detect.caffemodel",
+                                                      path_to_model + "sr.prototxt",
+                                                      path_to_model + "sr.caffemodel")
+
+    def detect(self, image):
+        decoded_info, corners = self.detector.detectAndDecode(image)
+        if len(decoded_info) == 0:
+            return False, np.array([])
+        corners = np.array(corners).reshape(-1, 4, 2)
+        self.decoded_info = decoded_info
+        self.detected_corners = corners
+        return True, corners
+
+    def decode(self, image):
+        if len(self.decoded_info) == 0:
+            return 0, [], None
+        return True, self.decoded_info, self.detected_corners
+
+
+def create_instance_qr(type_detector=DetectorQR.TypeDetector.opencv, path_to_model="./"):
+    if type_detector is DetectorQR.TypeDetector.opencv:
+        return CvObjDetector(type_detector)
+    if type_detector is DetectorQR.TypeDetector.opencv_wechat:
+        return CvWechatDetector(type_detector, path_to_model)
+    raise TypeError("this type_detector isn't supported")
 
 
 def find_images_path(dir_path):
@@ -140,7 +150,8 @@ def main():
     parser.add_argument("-p", "--path", help="input dataset path", default="qrcodes/detection", action="store",
                         dest="dataset_path")
     parser.add_argument("-m", "--model", help="path to opencv_wechat model (detect.prototxt, detect.caffemodel,"
-                        "sr.prototxt, sr.caffemodel), build opencv+contrib to get model", default="./", action="store",
+                                              "sr.prototxt, sr.caffemodel), build opencv+contrib to get model",
+                        default="./", action="store",
                         dest="model_path")
     parser.add_argument("-a", "--accuracy", help="input accuracy", default="20", action="store", dest="accuracy",
                         type=int)
@@ -166,7 +177,7 @@ def main():
     gl_count = 0
     gl_detect = 0
     gl_decode = 0
-    qr = DetectorQR(DetectorQR.TypeDetector[algorithm], model_path)
+    qr = create_instance_qr(DetectorQR.TypeDetector[algorithm], model_path)
     for dir in list_dirs:
         imgs_path = find_images_path(dir)
         qr_count = 0
@@ -179,7 +190,7 @@ def main():
             image = cv.imread(img_path, cv.IMREAD_IGNORE_ORIENTATION)
             ret, corners = qr.detect(image)
             img_name = img_path[:-4].replace('\\', '_')
-            img_name = "img_"+img_name.replace('/', '_')
+            img_name = "img_" + img_name.replace('/', '_')
             fs.startWriteStruct(img_name, cv.FILE_NODE_MAP)
             fs.write("bool", int(ret))
             fs.write("gold_corners", gold_corners)
@@ -200,8 +211,8 @@ def main():
                     i += 1
             fs.endWriteStruct()
         category = (dir.replace('\\', '_')).replace('/', '_').split('_')[-1]
-        detect_dict[category] = {"nums": qr_count, "detected": qr_detect, "detected_prop": qr_detect/max(1, qr_count)}
-        decode_dict[category] = {"nums": qr_count, "decoded": qr_decode, "decoded_prop": qr_decode/max(1, qr_count)}
+        detect_dict[category] = {"nums": qr_count, "detected": qr_detect, "detected_prop": qr_detect / max(1, qr_count)}
+        decode_dict[category] = {"nums": qr_count, "decoded": qr_decode, "decoded_prop": qr_decode / max(1, qr_count)}
         print(dir, qr_detect / max(1, qr_count), qr_decode / max(1, qr_count), qr_count)
         gl_count += qr_count
         gl_detect += qr_detect
