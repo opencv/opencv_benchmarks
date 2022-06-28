@@ -6,9 +6,9 @@ python qr.py -o out.yaml -p qrcodes/detection
 -H, --help - show help
 -o, --output - output file (default out.yaml)
 -p, --path - input dataset path (default qrcodes/detection)
--a, --accuracy - input accuracy (default 47)
+-a, --accuracy - input accuracy (default 20 pixels)
 -alg, --algorithm - input alg (default opencv)
--m, --metric - input metric (default ~)
+--metric - input norm (default l_inf)
 """
 
 import argparse
@@ -22,17 +22,15 @@ import cv2 as cv
 class DetectorQR:
     TypeDetector = Enum('TypeDetector', 'opencv opencv_wechat')
 
-    def __init__(self, type_detector=TypeDetector.opencv, path_to_model="./"):
+    def __init__(self):
         self.detected_corners = np.array([])
         self.decoded_info = []
         self.detector = None
-        self.type_detector = None
-        self.type_detector = type_detector
 
 
 class CvObjDetector(DetectorQR):
-    def __init__(self, type_detector=DetectorQR.TypeDetector.opencv):
-        super().__init__(type_detector)
+    def __init__(self):
+        super().__init__()
         self.detector = cv.QRCodeDetector()
 
     def detect(self, image):
@@ -51,8 +49,8 @@ class CvObjDetector(DetectorQR):
 
 
 class CvWechatDetector(DetectorQR):
-    def __init__(self, type_detector=DetectorQR.TypeDetector.opencv, path_to_model="./"):
-        super().__init__(type_detector)
+    def __init__(self, path_to_model="./"):
+        super().__init__()
         self.detector = cv.wechat_qrcode_WeChatQRCode(path_to_model + "detect.prototxt",
                                                       path_to_model + "detect.caffemodel",
                                                       path_to_model + "sr.prototxt",
@@ -75,9 +73,9 @@ class CvWechatDetector(DetectorQR):
 
 def create_instance_qr(type_detector=DetectorQR.TypeDetector.opencv, path_to_model="./"):
     if type_detector is DetectorQR.TypeDetector.opencv:
-        return CvObjDetector(type_detector)
+        return CvObjDetector()
     if type_detector is DetectorQR.TypeDetector.opencv_wechat:
-        return CvWechatDetector(type_detector, path_to_model)
+        return CvWechatDetector(path_to_model)
     raise TypeError("this type_detector isn't supported")
 
 
@@ -87,7 +85,7 @@ def find_images_path(dir_path):
     return images
 
 
-def get_corners(label_path):
+def get_gold_corners(label_path):
     f = open(label_path, "r")
     corners = []
     for line in f.readlines():
@@ -165,8 +163,10 @@ def main():
                         dest="model_path")
     parser.add_argument("-a", "--accuracy", help="input accuracy", default="20", action="store", dest="accuracy",
                         type=int)
-    parser.add_argument("-alg", "--algorithm", help="QR detect algorithm", default="opencv_wechat", action="store",
+    parser.add_argument("-alg", "--algorithm", help="QR detect algorithm", default="opencv", action="store",
                         dest="algorithm", choices=['opencv', 'opencv_wechat'], type=str)
+    parser.add_argument("--metric", help="Metric for distance between QR corners", default="l_inf", action="store",
+                        dest="metric", choices=['l1', 'l_inf'], type=str)
 
     args = parser.parse_args()
     show_help = args.show_help
@@ -178,6 +178,7 @@ def main():
     model_path = args.model_path
     accuracy = args.accuracy
     algorithm = args.algorithm
+    metric = args.metric
 
     list_dirs = glob.glob(dataset_path + "/*")
     fs = cv.FileStorage(output, cv.FILE_STORAGE_WRITE)
@@ -195,7 +196,7 @@ def main():
         qr_decode = 0
         for img_path in imgs_path:
             label_path = img_path[:-3] + "txt"
-            gold_corners = get_corners(label_path)
+            gold_corners = get_gold_corners(label_path)
             qr_count += gold_corners.shape[0]
             image = cv.imread(img_path, cv.IMREAD_IGNORE_ORIENTATION)
             ret, corners = qr.detect(image)
