@@ -22,7 +22,7 @@ import cv2 as cv
 
 
 class DetectorQR:
-    TypeDetector = Enum('TypeDetector', 'opencv opencv_wechat')
+    TypeDetector = Enum('TypeDetector', 'opencv opencv_aruco opencv_wechat')
 
     def __init__(self):
         self.detected_corners = np.array([])
@@ -47,6 +47,12 @@ class CvObjDetector(DetectorQR):
         if len(self.decoded_info) == 0:
             return 0, [], None
         return True, self.decoded_info, self.detected_corners
+
+
+class CvArucoDetector(CvObjDetector):
+    def __init__(self):
+        super().__init__()
+        self.detector = cv.QRCodeDetectorAruco()
 
 
 class CvWechatDetector(DetectorQR):
@@ -75,6 +81,8 @@ class CvWechatDetector(DetectorQR):
 def create_instance_qr(type_detector=DetectorQR.TypeDetector.opencv, path_to_model="./"):
     if type_detector is DetectorQR.TypeDetector.opencv:
         return CvObjDetector()
+    if type_detector is DetectorQR.TypeDetector.opencv_aruco:
+        return CvArucoDetector()
     if type_detector is DetectorQR.TypeDetector.opencv_wechat:
         return CvWechatDetector(path_to_model)
     raise TypeError("this type_detector isn't supported")
@@ -159,7 +167,7 @@ def main():
     parser.add_argument("-a", "--accuracy", help="input accuracy", default="20", action="store", dest="accuracy",
                         type=float)
     parser.add_argument("-alg", "--algorithm", help="QR detect algorithm", default="opencv", action="store",
-                        dest="algorithm", choices=['opencv', 'opencv_wechat'], type=str)
+                        dest="algorithm", choices=['opencv', 'opencv_aruco', 'opencv_wechat'], type=str)
     parser.add_argument("--metric", help="Metric for distance between QR corners", default="l2", action="store",
                         dest="metric", choices=['l1', 'l2', 'l_inf', 'intersection_over_union'], type=str)
 
