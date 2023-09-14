@@ -2,9 +2,9 @@
 
 """synthetic_benchmark.py
 Usage example:
-python augmentation_benchmark.py -o out.yaml -p path
+python augmentation_benchmark.py -p path
 -H, --help - show help
--o, --output - output file (default out.yaml)
+-o, --output - the path to the output of the dataset or detect statistics
 -p, --path - input dataset path
 -a, --accuracy - input accuracy (default 20 pixels)
 --metric - input norm (default l_inf)
@@ -14,6 +14,10 @@ import argparse
 from enum import Enum
 import numpy as np
 from numpy import linalg as LA
+import json
+import itertools
+import glob
+import os
 import cv2 as cv
 
 # l_1 - https://en.wikipedia.org/wiki/Norm_(mathematics)
@@ -35,19 +39,13 @@ def get_synthetic_rt(yaw, pitch, distance):
     rvec = np.zeros((3, 1), np.float64)
     tvec = np.zeros((3, 1), np.float64)
 
-    rotZ = np.array([[0.], [0.], [-0.5 * np.pi]])
-    rotX = np.array([[np.pi], [0.], [0.]])
-    rvecTmp, tvecTmp = cv.composeRT(rotZ, np.zeros((3, 1), np.float64),
-                                    rotX, np.zeros((3, 1), np.float64))[:2]
-
     rotPitch = np.array([[-pitch], [0], [0]])
     rotYaw = np.array([[0], [yaw], [0]])
+
     rvec, tvec = cv.composeRT(rotPitch, np.zeros((3, 1), np.float64),
                               rotYaw, np.zeros((3, 1), np.float64))[:2]
 
-    rvec, tvec = cv.composeRT(rvecTmp, np.zeros((3, 1), np.float64),
-                              rvec, np.zeros((3, 1), np.float64))[:2]
-    tvec = np.array([[0.], [0.], [distance]])
+    tvec = np.array([[0], [0], [distance]])
     return rvec, tvec
 
 
@@ -82,6 +80,7 @@ def project_image(img, yaw, pitch, distance):
     assert (img.shape == aux.shape)
     return aux
 
+
 def get_coord(num_rows, num_cols, start_x=0, start_y=0):
     i, j = np.ogrid[:num_rows, :num_cols]
     v = np.empty((num_rows, num_cols, 2), dtype=np.float32)
@@ -113,6 +112,9 @@ def find_img_points(name, chessboard):
 
 
 class TransformObject:
+    def __init__(self):
+        self.name = "none"
+
     def transform_image(self, image):
         return image
 
@@ -125,6 +127,7 @@ class PerspectiveTransform(TransformObject):
         self.yaw = yaw
         self.pitch = pitch
         self.distance = distance
+        self.name = "perspective"
 
     def transform_image(self, image):
         pass
@@ -138,6 +141,7 @@ class RotateTransform(TransformObject):
         self.angle = angle
         self.rel_center = rel_center
         self.rot_mat = None
+        self.name = "rotate"
 
     def transform_image(self, image):
         self.rot_mat = cv.getRotationMatrix2D(
@@ -164,6 +168,7 @@ class RotateTransform(TransformObject):
 class BluerTransform(TransformObject):
     def __init__(self, *, ksize=(5, 5)):
         self.ksize = ksize
+        self.name = "bluer"
 
     def transform_image(self, image):
         return cv.blur(image, self.ksize)
@@ -180,6 +185,7 @@ class PastingTransform(TransformObject):
         self.background_image = np.copy(background_object.image)
         self.row_offset = 0
         self.col_offset = 0
+        self.name = ""
 
     def transform_image(self, image):
         self.row_offset = (self.background_image.shape[0] - image.shape[0]) // 2
@@ -210,6 +216,7 @@ class UndistortFisheyeTransform:
         self.distCoeffs = np.zeros((4, 1), np.float64)
         self.distCoeffs[0] = -0.5012997
         self.distCoeffs[1] = -0.50116057
+        self.name = "undistorted"
 
     def transform_image(self, image):
         undistorted_img = cv.fisheye.undistortImage(image, K=self.cameraMatrix, D=self.distCoeffs, Knew=self.cameraMatrix)
@@ -220,13 +227,23 @@ class UndistortFisheyeTransform:
         assert len(points.shape) == 2
         if points.shape[1] == 3:
             points = points[:, :-1]
-        points = cv.fisheye.undistortPoints(points.reshape(1, -1, 2), K=self.cameraMatrix, D=self.distCoeffs, R=None, P=self.cameraMatrix)
+        points = cv.fisheye.undistortPoints(points.reshape(1, -1, 2), K=self.cameraMatrix, D=self.distCoeffs, R=None,
+                                            P=self.cameraMatrix)[0]
         return points
+
+
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)
 
 
 class SyntheticObject:
     def __init__(self):
         self.image = None
+        self.fields = None
+        self.history = []
 
     def transform_object(self, transform_object):
         return self
@@ -258,11 +275,16 @@ class SyntheticCharuco(SyntheticObject):
         self.aruco_ids = np.array(self.charuco_board.getIds())
         self.chessboard_corners = (np.array(self.charuco_board.getChessboardCorners(), dtype=np.float32)
                                    * cell_img_size)[:, :-1]
+        self.fields = {"board_size": None, "square_marker_length_rate": None, "dict_id": None, "aruco_corners": None,
+                       "aruco_ids": None, "chessboard_corners": None}
+        self.history = []
 
     def transform_object(self, transform_object):
         self.image = transform_object.transform_image(self.image)
         self.aruco_corners = np.array(transform_object.transform_points(self.aruco_corners), dtype=np.float32)
         self.chessboard_corners = np.array(transform_object.transform_points(self.chessboard_corners), dtype=np.float32)
+        if transform_object.name != "":
+            self.history.append(transform_object.name)
         return self
 
     def show(self, wait_key=0):
@@ -277,27 +299,25 @@ class SyntheticCharuco(SyntheticObject):
         cv.imshow("SyntheticCharuco", image)
         cv.waitKey(wait_key)
 
-    def write(self, path="test"):
-        fields = {"board_size": self.board_size, "square_marker_length_rate": self.square_marker_length_rate, "dict_id":
-                  self.dict_id, "aruco_corners": self.aruco_corners, "aruco_ids": self.aruco_ids, "chessboard_corners":
-                  self.chessboard_corners}
-        fs_write = cv.FileStorage(path+".txt", cv.FileStorage_WRITE)
-        for name, value in fields.items():
-            fs_write.write(name, value)
-        fs_write.release()
-        cv.imwrite(path+".png", self.image)
+    def write(self, path="test", filename="test"):
+        for name in self.fields:
+            self.fields[name] = getattr(self, name)
+        with open(path+"/"+filename+'.txt', 'w') as fp:
+            json.dump(self.fields, fp, cls=NumpyEncoder)
+        cv.imwrite(path+"/"+filename+".png", self.image)
 
-    def read(self, path="test"):
-        fields = {"board_size": self.board_size, "square_marker_length_rate": self.square_marker_length_rate, "dict_id":
-                  self.dict_id, "aruco_corners": self.aruco_corners, "aruco_ids": self.aruco_ids, "chessboard_corners":
-                  self.chessboard_corners}
-        fs_read = cv.FileStorage(path+".txt", cv.FileStorage_READ)
-        if fs_read.isOpened():
-            for name, value in fields.items():
-                a = fs_read.getNode(name)
-                print(a)
-        fs_read.release()
-        self.image = cv.imread(path+".png",)
+    def read(self, path="test", filename="test"):
+        with open(path+"/"+filename+".txt", 'r') as fp:
+            data_loaded = json.load(fp)
+            for name, value in data_loaded.items():
+                setattr(self, name, value)
+            self.dict = cv.aruco.getPredefinedDictionary(self.dict_id)
+            self.charuco_board = cv.aruco.CharucoBoard(self.board_size, 1., 1. * self.square_marker_length_rate, self.dict)
+            self.aruco_ids = np.asarray(self.aruco_ids)
+            self.aruco_corners = np.asarray(self.aruco_corners)
+            self.chessboard_corners = np.asarray(self.chessboard_corners)
+            self.history = []
+        self.image = cv.imread(path+"/"+filename+".png", cv.IMREAD_GRAYSCALE)
 
 
 class CharucoChecker:
@@ -306,57 +326,71 @@ class CharucoChecker:
         self.charuco_board = synthetic_charuco.charuco_board
         self.aruco_detector = cv.aruco.ArucoDetector(self.charuco_board.getDictionary())
         self.charuco_detector = cv.aruco.CharucoDetector(self.charuco_board)
+        self.accuracy = 10
+
+    def __check_aruco(self, marker_corners, marker_ids, type_dist):
+        gold = {}
+        gold_corners, gold_ids = self.synthetic_charuco.aruco_corners.reshape(-1, 4, 2),\
+            self.synthetic_charuco.aruco_ids
+        for marker_id, marker in zip(gold_ids, gold_corners):
+            gold[int(marker_id)] = marker
+        dist = 0.
+        detected_count = 0
+        total_count = len(gold_ids)
+        detected = {}
+        if len(marker_ids) > 0:
+            for marker_id, marker in zip(marker_ids, marker_corners):
+                detected[int(marker_id)] = marker.reshape(4, 2)
+            for gold_id in gold_ids:
+                gold_corner = gold_corners[int(gold_id)]
+                if int(gold_id) in detected:
+                    corner = detected[int(gold_id)]
+                    loc_dist = get_norm(gold_corner, corner, type_dist)
+                    if loc_dist < self.accuracy:
+                        dist += loc_dist
+                        detected_count += 1
+        return detected_count, total_count, dist
+
+    def __check_charuco(self, charuco_corners, charuco_ids, type_dist):
+        gold = {}
+        gold_corners = self.synthetic_charuco.chessboard_corners.reshape(-1, 2)
+        for charuco_id, charuco_corner in zip(range(len(gold_corners)), gold_corners):
+            gold[charuco_id] = charuco_corner
+        detected = {}
+        if len(charuco_ids) > 0:
+            for charuco_id, charuco_corner in zip(charuco_ids, charuco_corners):
+                detected[int(charuco_id)] = charuco_corner
+        dist = 0.
+        detected_count = 0
+        total_count = len(gold_corners)
+        for gold_id in range(total_count):
+            gold_corner = gold_corners[int(gold_id)]
+            if int(gold_id) in detected:
+                corner = detected[int(gold_id)]
+                loc_dist = get_norm(gold_corner, corner, type_dist)
+                if loc_dist < self.accuracy:
+                    dist += loc_dist
+                    detected_count += 1
+        return detected_count, total_count, dist
 
     def detect_and_check_aruco(self, type_dist=TypeNorm.l_inf):
         marker_corners, marker_ids, _ = self.aruco_detector.detectMarkers(self.synthetic_charuco.image)
-        detected = {}
-        for marker_id, marker in zip(marker_ids, marker_corners):
-            detected[int(marker_id)] = marker.reshape(4, 2)
-        gold_corners, gold_ids = self.synthetic_charuco.aruco_corners.reshape(-1, 4, 2),\
-            self.synthetic_charuco.aruco_ids
-        gold = {}
-        for marker_id, marker in zip(gold_ids, gold_corners):
-            gold[int(marker_id)] = marker
-        dist = 0.
-        detected_count = 0
-        total_count = len(gold_ids)
-        for gold_id in gold_ids:
-            gold_corner = gold_corners[int(gold_id)]
-            if int(gold_id) in detected:
-                corner = detected[int(gold_id)]
-                dist += get_norm(gold_corner, corner, type_dist)
-                detected_count += 1
-        dist /= detected_count
-        return detected_count / total_count, dist, total_count
+        return self.__check_aruco(marker_corners, marker_ids, type_dist)
 
-    def detect_and_check_charuco(self, type_dist):
+    def detect_and_check_charuco(self, type_dist=TypeNorm.l_inf):
         charuco_corners, charuco_ids, marker_corners, marker_ids = self.charuco_detector.detectBoard(self.synthetic_charuco.image)
-        detected = {}
-        for marker_id, marker in zip(marker_ids, marker_corners):
-            detected[int(marker_id)] = marker.reshape(4, 2)
-        gold_corners, gold_ids = self.synthetic_charuco.aruco_corners.reshape(-1, 4, 2), \
-            self.synthetic_charuco.aruco_ids
-        gold = {}
-        for marker_id, marker in zip(gold_ids, gold_corners):
-            gold[int(marker_id)] = marker
-        dist = 0.
-        detected_count = 0
-        total_count = len(gold_ids)
-        for gold_id in gold_ids:
-            gold_corner = gold_corners[int(gold_id)]
-            if int(gold_id) in detected:
-                corner = detected[int(gold_id)]
-                dist += get_norm(gold_corner, corner, type_dist)
-                detected_count += 1
-        dist /= detected_count
-        return detected_count / total_count, dist, total_count
+        ar_detected, ar_total, ar_dist = self.__check_aruco(marker_corners, marker_ids, type_dist)
+        ch_detected, ch_total, ch_dist = self.__check_charuco(charuco_corners, charuco_ids, type_dist)
+        return ar_detected, ar_total, ar_dist, ch_detected, ch_total, ch_dist
 
 
 def main():
     # parse command line options
     parser = argparse.ArgumentParser(description="augmentation benchmark", add_help=False)
     parser.add_argument("-H", "--help", help="show help", action="store_true", dest="show_help")
-    parser.add_argument("-o", "--output", help="output file", default="out.yaml", action="store", dest="output")
+    parser.add_argument("-g", "--generate", help="generate dataset", action="store_true", dest="generate_data")
+    parser.add_argument("-o", "--output", help="the path to the output of the dataset or detect statistics", default="",
+                        action="store", dest="output")
     parser.add_argument("-p", "--path", help="input dataset path", default="", action="store",
                         dest="dataset_path")
     parser.add_argument("-a", "--accuracy", help="input accuracy", default="20", action="store", dest="accuracy",
@@ -370,6 +404,39 @@ def main():
         parser.print_help()
         return
     output = args.output
+    generate_data = args.generate_data
+    if generate_data:
+        cell_img_size = 100
+        board_size = (5, 5)
+        background = BackGroundObject(num_rows=700, num_cols=700)
+
+        charuco_object = SyntheticCharuco(board_size=board_size, cell_img_size=cell_img_size)
+        # charuco_object.show()
+
+        concat_object = PastingTransform(background_object=background)
+        charuco_object.transform_object(concat_object)
+        # charuco_object.show()
+        charuco_object.write(output)
+
+        empty_t = TransformObject()
+        bluer_t = BluerTransform()
+        angle_rot = 11
+        rotate_t = RotateTransform(angle=angle_rot)
+        undistort_t = UndistortFisheyeTransform(img_size=charuco_object.image.shape)
+        transforms_list = [[undistort_t, empty_t], [bluer_t, empty_t]]
+        transforms_comb = list(itertools.product(*transforms_list))
+
+        for transforms in transforms_comb:
+            charuco_object.read(output)
+            for transform in transforms:
+                charuco_object.transform_object(transform)
+            folder = '_'.join(charuco_object.history)
+            if not os.path.exists(output+"/"+folder):
+                os.mkdir(output+"/"+folder)
+            print(folder)
+            charuco_object.write(output+"/"+folder)
+        return
+
     dataset_path = args.dataset_path
     accuracy = args.accuracy
     metric = TypeNorm.l_inf
@@ -380,12 +447,30 @@ def main():
     elif args.metric == "intersection_over_union":
         metric = TypeNorm.intersection_over_union
 
+    charuco_object = SyntheticCharuco(board_size=(3, 3), cell_img_size=20)
+
+    list_folders = glob.glob(dataset_path + "/*")
+    for folder in list_folders:
+        configs = glob.glob(folder + '/*.txt')
+        for config in configs:
+            charuco_object.read(folder, config.split('/')[-1].split('\\')[-1].split('.')[0])
+            #charuco_object.show()
+            charuco_checker = CharucoChecker(charuco_object)
+            # res = charuco_checker.detect_and_check_aruco()
+            res = charuco_checker.detect_and_check_charuco()
+            print(res)
+
+
+
+def test():
     cell_img_size = 100
     board_size = (5, 5)
     background = BackGroundObject(num_rows=700, num_cols=700)
     background.show()
 
     charuco_object = SyntheticCharuco(board_size=board_size, cell_img_size=cell_img_size)
+    charuco_object.write()
+    charuco_object.read()
     charuco_object.show()
 
     concat_object = PastingTransform(background_object=background)
@@ -402,8 +487,6 @@ def main():
     b3 = UndistortFisheyeTransform(img_size=charuco_object.image.shape)
     charuco_object.transform_object(b3)
     charuco_object.show()
-    charuco_object.write()
-    charuco_object.read()
 
     charuco_checker = CharucoChecker(charuco_object)
     res = charuco_checker.detect_and_check_aruco()
