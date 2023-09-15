@@ -453,16 +453,19 @@ def main():
 
     charuco_object = SyntheticCharuco(board_size=(3, 3), cell_img_size=20)
 
-    list_folders = glob.glob(dataset_path + "/*")
+    list_folders = next(os.walk(dataset_path))[1]
     for folder in list_folders:
-        configs = glob.glob(folder + '/*.txt')
+        configs = glob.glob(dataset_path+'/'+folder + '/*.txt')
+        res = np.zeros(6, dtype=np.float64)
         for config in configs:
-            charuco_object.read(folder, config.split('/')[-1].split('\\')[-1].split('.')[0])
+            charuco_object.read(dataset_path+'/'+folder, config.split('/')[-1].split('\\')[-1].split('.')[0])
             #charuco_object.show()
             charuco_checker = CharucoChecker(charuco_object)
             # res = charuco_checker.detect_and_check_aruco()
-            res = charuco_checker.detect_and_check_charuco()
-            print(res)
+            res += np.array(charuco_checker.detect_and_check_charuco())
+        print(folder)
+        print("detected", res[0]/res[1], "total", res[1], "distance", res[2]/max(res[1], 1),
+              "detected", res[3]/res[4], "total", res[4], "distance", res[5]/max(res[4], 1),)
 
 
 
