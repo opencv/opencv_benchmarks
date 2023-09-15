@@ -49,38 +49,6 @@ def get_synthetic_rt(yaw, pitch, distance):
     return rvec, tvec
 
 
-def project_image(img, yaw, pitch, distance):
-    rvec, tvec = get_synthetic_rt(yaw, pitch, distance)
-    camera_matrix = np.zeros((3, 3), dtype=np.float64)
-    camera_matrix[0, 0] = img.shape[1]
-    camera_matrix[1, 1] = img.shape[0]
-    camera_matrix[0, 2] = img.shape[1] / 2
-    camera_matrix[1, 2] = img.shape[0] / 2
-    camera_matrix[2, 2] = 1.
-    obj_points = np.array([
-        [0, 0, 0],
-        [1, 0, 0],
-        [1, 1, 0],
-        [0, 1, 0],
-    ], np.float32)
-    original_corners = np.array([
-        [0, 0],
-        [img.shape[1], 0],
-        [img.shape[1], img.shape[0]],
-        [0, img.shape[0]],
-    ], np.float32)
-    obj_points[:, :-1] -= 0.5
-    obj_points[:, -1:] = 0.  # -1
-
-    corners, _ = cv.projectPoints(obj_points, rvec, tvec, camera_matrix, np.zeros((5, 1), dtype=np.float64))
-    print(corners)
-    transformation = cv.getPerspectiveTransform(original_corners, corners)
-    border_value = 0
-    aux = cv.warpPerspective(img, transformation, img.shape, None, cv.INTER_NEAREST, cv.BORDER_CONSTANT, border_value)
-    assert (img.shape == aux.shape)
-    return aux
-
-
 def get_coord(num_rows, num_cols, start_x=0, start_y=0):
     i, j = np.ogrid[:num_rows, :num_cols]
     v = np.empty((num_rows, num_cols, 2), dtype=np.float32)
@@ -123,17 +91,48 @@ class TransformObject:
 
 
 class PerspectiveTransform(TransformObject):
-    def __init__(self, *, yaw, pitch, distance=1.0):
+    def __init__(self, *, img_size, yaw, pitch, distance=1.0):
         self.yaw = yaw
         self.pitch = pitch
         self.distance = distance
         self.name = "perspective"
 
+        rvec, tvec = get_synthetic_rt(yaw, pitch, distance)
+        camera_matrix = np.zeros((3, 3), dtype=np.float64)
+        camera_matrix[0, 0] = img_size[1]
+        camera_matrix[1, 1] = img_size[0]
+        camera_matrix[0, 2] = img_size[1] / 2
+        camera_matrix[1, 2] = img_size[0] / 2
+        camera_matrix[2, 2] = 1.
+        obj_points = np.array([
+            [0, 0, 0],
+            [1, 0, 0],
+            [1, 1, 0],
+            [0, 1, 0],
+        ], np.float32)
+        original_corners = np.array([
+            [0, 0],
+            [img_size[1], 0],
+            [img_size[1], img_size[0]],
+            [0, img_size[0]],
+        ], np.float32)
+        obj_points[:, :-1] -= 0.5
+        obj_points[:, -1:] = 0.
+
+        corners, _ = cv.projectPoints(obj_points, rvec, tvec, camera_matrix, np.zeros((5, 1), dtype=np.float64))
+        self.transformation = cv.getPerspectiveTransform(original_corners, corners)
+
     def transform_image(self, image):
-        pass
+        border_value = 0
+        aux = cv.warpPerspective(image, self.transformation, image.shape, None, cv.INTER_NEAREST, cv.BORDER_CONSTANT,
+                                 border_value)
+        assert (image.shape == aux.shape)
+        return aux
 
     def transform_points(self, points):
-        pass
+        points = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+        points = cv.perspectiveTransform(points, self.transformation)
+        return points.reshape(-1, 2)
 
 
 class RotateTransform(TransformObject):
@@ -422,11 +421,16 @@ def main():
         empty_t = TransformObject()
         bluer_t = BluerTransform()
 
+        perspective_t1 = PerspectiveTransform(img_size=charuco_object.image.shape, yaw=0., pitch=0.5)
+        perspective_t2 = PerspectiveTransform(img_size=charuco_object.image.shape, yaw=0.5, pitch=0.)
+        perspective_t3 = PerspectiveTransform(img_size=charuco_object.image.shape, yaw=0.5, pitch=0.5)
         undistort_t = UndistortFisheyeTransform(img_size=charuco_object.image.shape)
-        transforms_list = [[undistort_t, empty_t], [bluer_t, empty_t]]
+        transforms_list = [[perspective_t1, perspective_t2, perspective_t3, empty_t], [undistort_t, empty_t],
+                           [bluer_t, empty_t]]
         transforms_comb = list(itertools.product(*transforms_list))
 
-        for angle in range(0, 360, 11):
+        count = 0
+        for angle in range(0, 360, 31):
             for transforms in transforms_comb:
                 charuco_object.read(output)
                 rotate_t = RotateTransform(angle=angle)
@@ -437,8 +441,9 @@ def main():
                 if not os.path.exists(output+"/"+folder):
                     os.mkdir(output+"/"+folder)
                 print(folder)
-                charuco_object.write(output+"/"+folder, str(angle))
-                #charuco_object.show()
+                charuco_object.write(output+"/"+folder, str(count)+'_'+str(angle))
+                count += 1
+                # charuco_object.show()
         return
 
     dataset_path = args.dataset_path
