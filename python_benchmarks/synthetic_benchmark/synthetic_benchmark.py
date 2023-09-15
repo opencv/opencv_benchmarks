@@ -191,8 +191,8 @@ class PastingTransform(TransformObject):
         self.row_offset = (self.background_image.shape[0] - image.shape[0]) // 2
         self.col_offset = (self.background_image.shape[1] - image.shape[1]) // 2
         background_image = np.copy(self.background_image)
-        background_image[self.col_offset:self.col_offset + image.shape[0],
-                         self.row_offset:self.row_offset + image.shape[1]] = image
+        background_image[self.row_offset:self.row_offset + image.shape[0],
+                         self.col_offset:self.col_offset + image.shape[1]] = image
         image = background_image
         return image
 
@@ -408,33 +408,37 @@ def main():
     if generate_data:
         cell_img_size = 100
         board_size = (5, 5)
-        background = BackGroundObject(num_rows=700, num_cols=700)
 
         charuco_object = SyntheticCharuco(board_size=board_size, cell_img_size=cell_img_size)
         # charuco_object.show()
 
-        concat_object = PastingTransform(background_object=background)
-        charuco_object.transform_object(concat_object)
+        background = BackGroundObject(num_rows=int(cell_img_size*board_size[1]*1.4),
+                                      num_cols=int(cell_img_size*board_size[0]*1.4))
+        pasting_object = PastingTransform(background_object=background)
+        charuco_object.transform_object(pasting_object)
         # charuco_object.show()
         charuco_object.write(output)
 
         empty_t = TransformObject()
         bluer_t = BluerTransform()
-        angle_rot = 11
-        rotate_t = RotateTransform(angle=angle_rot)
+
         undistort_t = UndistortFisheyeTransform(img_size=charuco_object.image.shape)
         transforms_list = [[undistort_t, empty_t], [bluer_t, empty_t]]
         transforms_comb = list(itertools.product(*transforms_list))
 
-        for transforms in transforms_comb:
-            charuco_object.read(output)
-            for transform in transforms:
-                charuco_object.transform_object(transform)
-            folder = '_'.join(charuco_object.history)
-            if not os.path.exists(output+"/"+folder):
-                os.mkdir(output+"/"+folder)
-            print(folder)
-            charuco_object.write(output+"/"+folder)
+        for angle in range(0, 360, 11):
+            for transforms in transforms_comb:
+                charuco_object.read(output)
+                rotate_t = RotateTransform(angle=angle)
+                charuco_object.transform_object(rotate_t)
+                for transform in transforms:
+                    charuco_object.transform_object(transform)
+                folder = '_'.join(charuco_object.history)
+                if not os.path.exists(output+"/"+folder):
+                    os.mkdir(output+"/"+folder)
+                print(folder)
+                charuco_object.write(output+"/"+folder, str(angle))
+                #charuco_object.show()
         return
 
     dataset_path = args.dataset_path
