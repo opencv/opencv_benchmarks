@@ -176,6 +176,22 @@ class BlurTransform(TransformObject):
         return super().transform_points(points)
 
 
+class GaussNoiseTransform(TransformObject):
+    def __init__(self):
+        self.name = "gaussNoise"
+
+    def transform_image(self, image):
+        row, col = image.shape
+        mean = 0
+        sigma = 16
+        gauss = np.random.normal(mean, sigma, (row, col))
+        gauss = gauss.reshape(row, col)
+        return np.clip(image + gauss, 0, 255).astype(np.uint8)
+
+    def transform_points(self, points):
+        return super().transform_points(points)
+
+
 class PastingTransform(TransformObject):
     def __init__(self, *, rel_center=(0.5, 0.5), background_object):
         self.rel_center = rel_center
@@ -430,6 +446,7 @@ def main():
 
         empty_t = TransformObject()
         blur_t = BlurTransform()
+        gauss_noise_t = GaussNoiseTransform()
 
         perspective_t1 = PerspectiveTransform(img_size=charuco_object.image.shape, yaw=0., pitch=0.5)
         perspective_t2 = PerspectiveTransform(img_size=charuco_object.image.shape, yaw=0.5, pitch=0.)
@@ -437,7 +454,7 @@ def main():
         undistort_t = UndistortFisheyeTransform(img_size=charuco_object.image.shape)
         transforms_list = [[perspective_t1, perspective_t2, perspective_t3, empty_t],
                            [undistort_t, empty_t],
-                           [blur_t, empty_t]]
+                           [blur_t, gauss_noise_t, empty_t]]
         transforms_comb = list(itertools.product(*transforms_list))
 
         count = 0
