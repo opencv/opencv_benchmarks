@@ -124,7 +124,7 @@ class PerspectiveTransform(TransformObject):
 
     def transform_image(self, image):
         border_value = 0
-        aux = cv.warpPerspective(image, self.transformation, image.shape, None, cv.INTER_NEAREST, cv.BORDER_CONSTANT,
+        aux = cv.warpPerspective(image, self.transformation, (image.shape[1], image.shape[0]), None, cv.INTER_NEAREST, cv.BORDER_CONSTANT,
                                  border_value)
         assert (image.shape == aux.shape)
         return aux
@@ -176,7 +176,6 @@ class BluerTransform(TransformObject):
         return super().transform_points(points)
 
 
-# TODO: need to use rel_center
 class PastingTransform(TransformObject):
     def __init__(self, *, rel_center=(0.5, 0.5), background_object):
         self.rel_center = rel_center
@@ -187,8 +186,8 @@ class PastingTransform(TransformObject):
         self.name = ""
 
     def transform_image(self, image):
-        self.row_offset = (self.background_image.shape[0] - image.shape[0]) // 2
-        self.col_offset = (self.background_image.shape[1] - image.shape[1]) // 2
+        self.row_offset = int((self.background_image.shape[0] - image.shape[0]) * self.rel_center[0])
+        self.col_offset = int((self.background_image.shape[1] - image.shape[1]) * self.rel_center[1])
         background_image = np.copy(self.background_image)
         background_image[self.row_offset:self.row_offset + image.shape[0],
                          self.col_offset:self.col_offset + image.shape[1]] = image
@@ -213,8 +212,8 @@ class UndistortFisheyeTransform:
         self.cameraMatrix[0, 2] = img_size[0] / 2
         self.cameraMatrix[1, 2] = img_size[0] / 2
         self.distCoeffs = np.zeros((4, 1), np.float64)
-        self.distCoeffs[0] = -0.5012997
-        self.distCoeffs[1] = -0.50116057
+        self.distCoeffs[0] = -0.65012997
+        self.distCoeffs[1] = -0.650116057
         self.name = "undistorted"
 
     def transform_image(self, image):
@@ -394,6 +393,14 @@ def main():
                         dest="dataset_path")
     parser.add_argument("-a", "--accuracy", help="input accuracy", default="20", action="store", dest="accuracy",
                         type=float)
+    parser.add_argument("--marker_length_rate", help="square marker length rate for charuco", default=".5",
+                        action="store", dest="marker_length_rate", type=float)
+    parser.add_argument("--board_x", help="input board x size", default="6", action="store", dest="board_x", type=int)
+    parser.add_argument("--board_y", help="input board y size", default="6", action="store", dest="board_y", type=int)
+    parser.add_argument("--rel_center_x", help="input relative board center x", default=".5", action="store",
+                        dest="rel_center_x", type=float)
+    parser.add_argument("--rel_center_y", help="input relative board center y", default=".7", action="store",
+                        dest="rel_center_y", type=float)
     parser.add_argument("--metric", help="Metric for distance between result and gold ", default="l2", action="store",
                         dest="metric", choices=['l1', 'l2', 'l_inf', 'intersection_over_union'], type=str)
 
@@ -406,14 +413,17 @@ def main():
     generate_data = args.generate_data
     if generate_data:
         cell_img_size = 100
-        board_size = (5, 5)
+        board_size = [args.board_x, args.board_y]
+        marker_length_rate = args.marker_length_rate
 
-        charuco_object = SyntheticCharuco(board_size=board_size, cell_img_size=cell_img_size)
+        charuco_object = SyntheticCharuco(board_size=board_size, cell_img_size=cell_img_size,
+                                          square_marker_length_rate=marker_length_rate)
         # charuco_object.show()
 
-        background = BackGroundObject(num_rows=int(cell_img_size*board_size[1]*1.4),
-                                      num_cols=int(cell_img_size*board_size[0]*1.4))
-        pasting_object = PastingTransform(background_object=background)
+        background = BackGroundObject(num_rows=int(cell_img_size*board_size[1]*3.),
+                                      num_cols=int(cell_img_size*board_size[0]*3.))
+        rel_center_x, rel_center_y = args.rel_center_x, args.rel_center_y
+        pasting_object = PastingTransform(background_object=background, rel_center=(rel_center_y, rel_center_x))
         charuco_object.transform_object(pasting_object)
         # charuco_object.show()
         charuco_object.write(output)
@@ -425,7 +435,8 @@ def main():
         perspective_t2 = PerspectiveTransform(img_size=charuco_object.image.shape, yaw=0.5, pitch=0.)
         perspective_t3 = PerspectiveTransform(img_size=charuco_object.image.shape, yaw=0.5, pitch=0.5)
         undistort_t = UndistortFisheyeTransform(img_size=charuco_object.image.shape)
-        transforms_list = [[perspective_t1, perspective_t2, perspective_t3, empty_t], [undistort_t, empty_t],
+        transforms_list = [[perspective_t1, perspective_t2, perspective_t3, empty_t],
+                           [undistort_t, empty_t],
                            [bluer_t, empty_t]]
         transforms_comb = list(itertools.product(*transforms_list))
 
@@ -471,38 +482,6 @@ def main():
         print(folder)
         print("detected", res[0]/res[1], "total", res[1], "distance", res[2]/max(res[1], 1),
               "detected", res[3]/res[4], "total", res[4], "distance", res[5]/max(res[4], 1),)
-
-
-
-def test():
-    cell_img_size = 100
-    board_size = (5, 5)
-    background = BackGroundObject(num_rows=700, num_cols=700)
-    background.show()
-
-    charuco_object = SyntheticCharuco(board_size=board_size, cell_img_size=cell_img_size)
-    charuco_object.write()
-    charuco_object.read()
-    charuco_object.show()
-
-    concat_object = PastingTransform(background_object=background)
-    charuco_object.transform_object(concat_object)
-    charuco_object.show()
-
-    b1 = BluerTransform()
-    b2 = RotateTransform(angle=30)
-    charuco_object.transform_object(b1)
-    charuco_object.show()
-    charuco_object.transform_object(b2)
-    charuco_object.show()
-
-    b3 = UndistortFisheyeTransform(img_size=charuco_object.image.shape)
-    charuco_object.transform_object(b3)
-    charuco_object.show()
-
-    charuco_checker = CharucoChecker(charuco_object)
-    res = charuco_checker.detect_and_check_aruco()
-    print(res)
 
 
 if __name__ == '__main__':
