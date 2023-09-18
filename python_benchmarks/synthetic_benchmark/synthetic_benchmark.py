@@ -144,7 +144,7 @@ class RotateTransform(TransformObject):
 
     def transform_image(self, image):
         self.rot_mat = cv.getRotationMatrix2D(
-            [self.rel_center[0] * image.shape[1], self.rel_center[0] * image.shape[0]],
+            [self.rel_center[0] * image.shape[1], self.rel_center[1] * image.shape[0]],
             self.angle, 1.0)
         warp_rotate_dst = cv.warpAffine(image, self.rot_mat, (image.shape[1], image.shape[0]))
         return warp_rotate_dst
@@ -186,8 +186,8 @@ class PastingTransform(TransformObject):
         self.name = ""
 
     def transform_image(self, image):
-        self.row_offset = int((self.background_image.shape[0] - image.shape[0]) * self.rel_center[0])
-        self.col_offset = int((self.background_image.shape[1] - image.shape[1]) * self.rel_center[1])
+        self.row_offset = int(self.background_image.shape[0] * self.rel_center[0] - image.shape[0] / 2)
+        self.col_offset = int(self.background_image.shape[1] * self.rel_center[1] - image.shape[1] / 2)
         background_image = np.copy(self.background_image)
         background_image[self.row_offset:self.row_offset + image.shape[0],
                          self.col_offset:self.col_offset + image.shape[1]] = image
@@ -399,7 +399,7 @@ def main():
     parser.add_argument("--board_y", help="input board y size", default="6", action="store", dest="board_y", type=int)
     parser.add_argument("--rel_center_x", help="input relative board center x", default=".5", action="store",
                         dest="rel_center_x", type=float)
-    parser.add_argument("--rel_center_y", help="input relative board center y", default=".7", action="store",
+    parser.add_argument("--rel_center_y", help="input relative board center y", default=".5", action="store",
                         dest="rel_center_y", type=float)
     parser.add_argument("--metric", help="Metric for distance between result and gold ", default="l2", action="store",
                         dest="metric", choices=['l1', 'l2', 'l_inf', 'intersection_over_union'], type=str)
@@ -444,7 +444,7 @@ def main():
         for angle in range(0, 360, 31):
             for transforms in transforms_comb:
                 charuco_object.read(output)
-                rotate_t = RotateTransform(angle=angle)
+                rotate_t = RotateTransform(angle=angle, rel_center=(rel_center_x, rel_center_y))
                 charuco_object.transform_object(rotate_t)
                 for transform in transforms:
                     charuco_object.transform_object(transform)
