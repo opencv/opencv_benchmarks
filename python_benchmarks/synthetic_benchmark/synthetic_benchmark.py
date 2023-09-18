@@ -164,10 +164,10 @@ class RotateTransform(TransformObject):
         return res_points
 
 
-class BluerTransform(TransformObject):
+class BlurTransform(TransformObject):
     def __init__(self, *, ksize=(5, 5)):
         self.ksize = ksize
-        self.name = "bluer"
+        self.name = "blur"
 
     def transform_image(self, image):
         return cv.blur(image, self.ksize)
@@ -429,7 +429,7 @@ def main():
         charuco_object.write(output)
 
         empty_t = TransformObject()
-        bluer_t = BluerTransform()
+        blur_t = BlurTransform()
 
         perspective_t1 = PerspectiveTransform(img_size=charuco_object.image.shape, yaw=0., pitch=0.5)
         perspective_t2 = PerspectiveTransform(img_size=charuco_object.image.shape, yaw=0.5, pitch=0.)
@@ -437,7 +437,7 @@ def main():
         undistort_t = UndistortFisheyeTransform(img_size=charuco_object.image.shape)
         transforms_list = [[perspective_t1, perspective_t2, perspective_t3, empty_t],
                            [undistort_t, empty_t],
-                           [bluer_t, empty_t]]
+                           [blur_t, empty_t]]
         transforms_comb = list(itertools.product(*transforms_list))
 
         count = 0
