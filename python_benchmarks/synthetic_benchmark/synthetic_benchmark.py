@@ -453,46 +453,49 @@ class CharucoChecker:
         ch_detected, ch_total, ch_dist = self._check_charuco(synthetic_charuco, charuco_corners, charuco_ids, type_dist)
         return ar_detected, ar_total, ar_dist, ch_detected, ch_total, ch_dist
 
+    def formatting_result(self, category, res):
+        print("category:", category, "accuracy:", self.accuracy)
+        print("detected aruco:", res[0] / res[1], "total aruco:", res[1], "distance:", res[2] / max(res[1], 1),
+              "detected charuco:", res[3] / res[4], "total charuco:", res[4], "distance:", res[5] / max(res[4], 1))
+        print()
+
 
 class ChessboardChecker:
-    def __init__(self, synthetic_chessboard):
-        self.synthetic_chessboard = synthetic_chessboard
-        self.accuracy = 10
+    def __init__(self, accuracy=10):
+        self.accuracy = accuracy
+        self.type_dist = TypeNorm.l_inf
 
-    def __check_chessboard(self, corners, type_dist):
+    def __check_chessboard(self, synthetic_chessboard, corners, type_dist):
         gold = {}
-        gold_corners = self.synthetic_chessboard.chessboard_corners.reshape(-1, 2)
+        gold_corners = synthetic_chessboard.chessboard_corners.reshape(-1, 2)
         dist = 0
         detected_count = 0
         total_count = len(gold_corners)
-        for i, gold_corner in enumerate(gold_corners):
-            loc_dist = np.min([get_norm(gold_corner, corner, type_dist) for corner in corners])
-            if loc_dist < self.accuracy:
-                dist += loc_dist
-                detected_count += 1
+        if corners is not None:
+            for i, gold_corner in enumerate(gold_corners):
+                loc_dist = np.min([get_norm(gold_corner, corner, type_dist) for corner in corners])
+                if loc_dist < self.accuracy:
+                    dist += loc_dist
+                    detected_count += 1
         return detected_count, total_count, dist
 
-    def detect_and_check(self, type_dist=TypeNorm.l_inf):
+    def detect_and_check(self, synthetic_chessboard, type_dist=TypeNorm.l_inf):
         criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-        img_points = []
-        gray = self.synthetic_chessboard.image
+        gray = synthetic_chessboard.image
         # Find the chess board corners
-        # cv.imshow("gray", gray)
-        # cv.waitKey(0)
-        chessboard = (self.synthetic_chessboard.board_size[1]-1, self.synthetic_chessboard.board_size[0]-1)
+        chessboard = (synthetic_chessboard.board_size[1]-1, synthetic_chessboard.board_size[0]-1)
         ret, corners = cv.findChessboardCorners(gray, chessboard, criteria)
 
         # If found, add object points, image points (after refining them)
         if ret is True:
             corners = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-            img_points.append(corners)
-            board_points = corners.astype(np.int32)
+        return self.__check_chessboard(synthetic_chessboard, corners, type_dist)
 
-            if 0:
-                cv.drawContours(gray, board_points, -1, (127, 127, 127), 10)
-                cv.imshow("321", gray)
-                cv.waitKey(0)
-        return self.__check_chessboard(corners, type_dist)
+    def formatting_result(self, category, res):
+        print("category:", category, "accuracy:", self.accuracy)
+        print("detected chessboard corners:", res[0] / res[1], "total chessboard corners:", res[1], "distance:",
+              res[2] / max(res[1], 1))
+        print()
 
 
 def generate_dataset(args, synthetic_object, background_color=0):
@@ -529,7 +532,7 @@ def generate_dataset(args, synthetic_object, background_color=0):
             folder = '_'.join(synthetic_object.history)
             if not os.path.exists(output + "/" + folder):
                 os.mkdir(output + "/" + folder)
-            print(folder)
+            # print(folder)
             synthetic_object.write(output + "/" + folder, str(count) + '_' + str(angle))
             count += 1
             # charuco_object.show()
@@ -539,7 +542,8 @@ def main():
     # parse command line options
     parser = argparse.ArgumentParser(description="augmentation benchmark", add_help=False)
     parser.add_argument("-H", "--help", help="show help", action="store_true", dest="show_help")
-    parser.add_argument("-g", "--generate", help="generate dataset", action="store_true", dest="generate_data")
+    parser.add_argument("--configuration", help="script launch configuration", default="generate_run", action="store",
+                        dest="configuration", choices=['generate_run', 'generate', 'run'], type=str)
     parser.add_argument("-o", "--output", help="the path to the output of the dataset or detect statistics", default="",
                         action="store", dest="output")
     parser.add_argument("-p", "--path", help="input dataset path", default="", action="store",
@@ -582,29 +586,30 @@ def main():
         marker_length_rate = args.marker_length_rate
         synthetic_object = SyntheticCharuco(board_size=board_size, cell_img_size=cell_img_size,
                                             square_marker_length_rate=marker_length_rate)
+        checker = CharucoChecker(accuracy)
     elif args.synthetic_object == "chessboard":
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticChessboard(board_size=board_size, cell_img_size=cell_img_size)
+        checker = ChessboardChecker(accuracy)
     else:
         synthetic_object = None
 
-    generate_data = args.generate_data
-    if generate_data:
+    configuration = args.configuration
+    if configuration == "generate" or configuration == "generate_run":
         generate_dataset(args, synthetic_object)
-        return
+        if configuration == "generate":
+            return
 
-    checker = CharucoChecker(accuracy)
     list_folders = next(os.walk(dataset_path))[1]
     for folder in list_folders:
         configs = glob.glob(dataset_path + '/' + folder + '/*.txt')
-        res = np.zeros(6, dtype=np.float64)
+        res = None
         for config in configs:
             synthetic_object.read(dataset_path + '/' + folder, config.split('/')[-1].split('\\')[-1].split('.')[0])
             # charuco_object.show()
-            res += np.array(checker.detect_and_check(synthetic_object))
-        print(folder)
-        print("detected", res[0] / res[1], "total", res[1], "distance", res[2] / max(res[1], 1),
-              "detected", res[3] / res[4], "total", res[4], "distance", res[5] / max(res[4], 1), )
+            res = res + np.array(checker.detect_and_check(synthetic_object)) if res is not None \
+                else np.array(checker.detect_and_check(synthetic_object))
+        checker.formatting_result(folder, res)
 
 
 if __name__ == '__main__':
