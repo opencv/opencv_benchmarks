@@ -4,8 +4,7 @@
 Usage example:
 python augmentation_benchmark.py -p path
 -H, --help - show help
--o, --output - the path to the output of the dataset or detect statistics
--p, --path - input dataset path
+-p, --path - the path to the input/output of the dataset or detect statistics
 -a, --accuracy - input accuracy (default 20 pixels)
 --metric - input norm (default l_inf)
 """
@@ -308,12 +307,12 @@ class SyntheticAruco(SyntheticObject):
     def write(self, path="test", filename="test"):
         for name in self.fields:
             self.fields[name] = getattr(self, name)
-        with open(path + "/" + filename + '.txt', 'w') as fp:
+        with open(path + "/" + filename + '.json', 'w') as fp:
             json.dump(self.fields, fp, cls=NumpyEncoder)
         cv.imwrite(path + "/" + filename + ".png", self.image)
 
     def read(self, path="test", filename="test"):
-        with open(path + "/" + filename + ".txt", 'r') as fp:
+        with open(path + "/" + filename + ".json", 'r') as fp:
             data_loaded = json.load(fp)
             for name, value in data_loaded.items():
                 setattr(self, name, value)
@@ -358,8 +357,7 @@ class ArucoChecker:
         return check_aruco(synthetic_aruco, marker_corners, marker_ids, type_dist, self.accuracy)
 
     def formatting_result(self, category, res):
-        print("category:", category, "accuracy:", self.accuracy)
-        print("category:", category, "accuracy:", self.accuracy)
+        print("category:", category)
         print("detected aruco:", res[0] / res[1], "total aruco:", res[1], "distance:", res[2] / max(res[1], 1))
         print()
 
@@ -409,12 +407,12 @@ class SyntheticCharuco(SyntheticObject):
     def write(self, path="test", filename="test"):
         for name in self.fields:
             self.fields[name] = getattr(self, name)
-        with open(path + "/" + filename + '.txt', 'w') as fp:
+        with open(path + "/" + filename + '.json', 'w') as fp:
             json.dump(self.fields, fp, cls=NumpyEncoder)
         cv.imwrite(path + "/" + filename + ".png", self.image)
 
     def read(self, path="test", filename="test"):
-        with open(path + "/" + filename + ".txt", 'r') as fp:
+        with open(path + "/" + filename + ".json", 'r') as fp:
             data_loaded = json.load(fp)
             for name, value in data_loaded.items():
                 setattr(self, name, value)
@@ -463,7 +461,7 @@ class CharucoChecker:
         return ar_detected, ar_total, ar_dist, ch_detected, ch_total, ch_dist
 
     def formatting_result(self, category, res):
-        print("category:", category, "accuracy:", self.accuracy)
+        print("category:", category)
         print("detected aruco:", res[0] / res[1], "total aruco:", res[1], "distance:", res[2] / max(res[1], 1),
               "detected charuco:", res[3] / res[4], "total charuco:", res[4], "distance:", res[5] / max(res[4], 1))
         print()
@@ -505,12 +503,12 @@ class SyntheticChessboard(SyntheticObject):
     def write(self, path="test", filename="test"):
         for name in self.fields:
             self.fields[name] = getattr(self, name)
-        with open(path + "/" + filename + '.txt', 'w') as fp:
+        with open(path + "/" + filename + '.json', 'w') as fp:
             json.dump(self.fields, fp, cls=NumpyEncoder)
         cv.imwrite(path + "/" + filename + ".png", self.image)
 
     def read(self, path="test", filename="test"):
-        with open(path + "/" + filename + ".txt", 'r') as fp:
+        with open(path + "/" + filename + ".json", 'r') as fp:
             data_loaded = json.load(fp)
             for name, value in data_loaded.items():
                 setattr(self, name, value)
@@ -551,20 +549,19 @@ class ChessboardChecker:
         return self.__check_chessboard(synthetic_chessboard, corners, type_dist)
 
     def formatting_result(self, category, res):
-        print("category:", category, "accuracy:", self.accuracy)
+        print("category:", category)
         print("detected chessboard corners:", res[0] / res[1], "total chessboard corners:", res[1], "distance:",
               res[2] / max(res[1], 1))
         print()
 
 
 def generate_dataset(args, synthetic_object, background_color=0):
-    output = args.output
+    output = args.dataset_path
     background = BackGroundObject(num_rows=int(synthetic_object.image.shape[0] * 2.),
                                   num_cols=int(synthetic_object.image.shape[1] * 2.), color=background_color)
     rel_center_x, rel_center_y = args.rel_center_x, args.rel_center_y
     pasting_object = PastingTransform(background_object=background, rel_center=(rel_center_y, rel_center_x))
     synthetic_object.transform_object(pasting_object)
-    # charuco_object.show()
     synthetic_object.write(output)
 
     empty_t = TransformObject()
@@ -602,9 +599,7 @@ def main():
     parser.add_argument("-H", "--help", help="show help", action="store_true", dest="show_help")
     parser.add_argument("--configuration", help="script launch configuration", default="generate_run", action="store",
                         dest="configuration", choices=['generate_run', 'generate', 'run'], type=str)
-    parser.add_argument("-o", "--output", help="the path to the output of the dataset or detect statistics", default="",
-                        action="store", dest="output")
-    parser.add_argument("-p", "--path", help="input dataset path", default="", action="store",
+    parser.add_argument("-p", "--path", help="input/output dataset path", default="", action="store",
                         dest="dataset_path")
     parser.add_argument("-a", "--accuracy", help="input accuracy", default="10", action="store", dest="accuracy",
                         type=float)
@@ -664,7 +659,7 @@ def main():
 
     list_folders = next(os.walk(dataset_path))[1]
     for folder in list_folders:
-        configs = glob.glob(dataset_path + '/' + folder + '/*.txt')
+        configs = glob.glob(dataset_path + '/' + folder + '/*.json')
         res = None
         for config in configs:
             synthetic_object.read(dataset_path + '/' + folder, config.split('/')[-1].split('\\')[-1].split('.')[0])
