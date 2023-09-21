@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 
-"""synthetic_benchmark.py
+"""objdetect_benchmark.py
 Usage example:
-python augmentation_benchmark.py -p path
+python objdetect_benchmark.py -p path
 -H, --help - show help
 -p, --path - the path to the input/output of the dataset or detect statistics
 -a, --accuracy - input accuracy (default 20 pixels)
