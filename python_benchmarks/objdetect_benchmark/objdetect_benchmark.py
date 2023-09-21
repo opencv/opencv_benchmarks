@@ -323,7 +323,7 @@ class SyntheticAruco(SyntheticObject):
         self.image = cv.imread(path + "/" + filename + ".png", cv.IMREAD_GRAYSCALE)
 
 
-def check_aruco(synthetic_aruco, marker_corners, marker_ids, type_dist, accuracy):
+def check_aruco(synthetic_aruco, marker_corners, marker_ids, accuracy, type_dist):
     gold = {}
     gold_corners, gold_ids = synthetic_aruco.aruco_corners.reshape(-1, 4, 2), \
         synthetic_aruco.aruco_ids
@@ -348,13 +348,14 @@ def check_aruco(synthetic_aruco, marker_corners, marker_ids, type_dist, accuracy
 
 
 class ArucoChecker:
-    def __init__(self, accuracy=10):
+    def __init__(self, accuracy, type_dist):
         self.accuracy = accuracy
+        self.type_dist = type_dist
 
-    def detect_and_check(self, synthetic_aruco, type_dist=TypeNorm.l_inf):
+    def detect_and_check(self, synthetic_aruco):
         aruco_detector = cv.aruco.ArucoDetector(synthetic_aruco.grid_board.getDictionary())
         marker_corners, marker_ids, _ = aruco_detector.detectMarkers(synthetic_aruco.image)
-        return check_aruco(synthetic_aruco, marker_corners, marker_ids, type_dist, self.accuracy)
+        return check_aruco(synthetic_aruco, marker_corners, marker_ids, self.accuracy, self.type_dist)
 
     def formatting_result(self, category, res):
         print("category:", category)
@@ -427,10 +428,11 @@ class SyntheticCharuco(SyntheticObject):
 
 
 class CharucoChecker:
-    def __init__(self, accuracy=10):
+    def __init__(self, accuracy, type_dist):
         self.accuracy = accuracy
+        self.type_dist = type_dist
 
-    def _check_charuco(self, synthetic_charuco, charuco_corners, charuco_ids, type_dist):
+    def _check_charuco(self, synthetic_charuco, charuco_corners, charuco_ids):
         gold = {}
         gold_corners = synthetic_charuco.chessboard_corners.reshape(-1, 2)
         for charuco_id, charuco_corner in zip(range(len(gold_corners)), gold_corners):
@@ -446,18 +448,18 @@ class CharucoChecker:
             gold_corner = gold_corners[int(gold_id)]
             if int(gold_id) in detected:
                 corner = detected[int(gold_id)]
-                loc_dist = get_norm(gold_corner, corner, type_dist)
+                loc_dist = get_norm(gold_corner, corner, self.type_dist)
                 if loc_dist < self.accuracy:
                     dist += loc_dist
                     detected_count += 1
         return detected_count, total_count, dist
 
-    def detect_and_check(self, synthetic_charuco, type_dist=TypeNorm.l_inf):
+    def detect_and_check(self, synthetic_charuco):
         charuco_detector = cv.aruco.CharucoDetector(synthetic_charuco.charuco_board)
         charuco_corners, charuco_ids, marker_corners, marker_ids = charuco_detector.detectBoard(synthetic_charuco.image)
-        ar_detected, ar_total, ar_dist = check_aruco(synthetic_charuco, marker_corners, marker_ids, type_dist,
-                                                     self.accuracy)
-        ch_detected, ch_total, ch_dist = self._check_charuco(synthetic_charuco, charuco_corners, charuco_ids, type_dist)
+        ar_detected, ar_total, ar_dist = check_aruco(synthetic_charuco, marker_corners, marker_ids, self.accuracy,
+                                                     self.type_dist)
+        ch_detected, ch_total, ch_dist = self._check_charuco(synthetic_charuco, charuco_corners, charuco_ids)
         return ar_detected, ar_total, ar_dist, ch_detected, ch_total, ch_dist
 
     def formatting_result(self, category, res):
@@ -518,11 +520,11 @@ class SyntheticChessboard(SyntheticObject):
 
 
 class ChessboardChecker:
-    def __init__(self, accuracy=10):
+    def __init__(self, accuracy, type_dist):
         self.accuracy = accuracy
-        self.type_dist = TypeNorm.l_inf
+        self.type_dist = type_dist
 
-    def __check_chessboard(self, synthetic_chessboard, corners, type_dist):
+    def __check_chessboard(self, synthetic_chessboard, corners):
         gold = {}
         gold_corners = synthetic_chessboard.chessboard_corners.reshape(-1, 2)
         dist = 0
@@ -530,13 +532,13 @@ class ChessboardChecker:
         total_count = len(gold_corners)
         if corners is not None:
             for i, gold_corner in enumerate(gold_corners):
-                loc_dist = np.min([get_norm(gold_corner, corner, type_dist) for corner in corners])
+                loc_dist = np.min([get_norm(gold_corner, corner, self.type_dist) for corner in corners])
                 if loc_dist < self.accuracy:
                     dist += loc_dist
                     detected_count += 1
         return detected_count, total_count, dist
 
-    def detect_and_check(self, synthetic_chessboard, type_dist=TypeNorm.l_inf):
+    def detect_and_check(self, synthetic_chessboard):
         criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
         gray = synthetic_chessboard.image
         # Find the chess board corners
@@ -546,13 +548,12 @@ class ChessboardChecker:
         # If found, add object points, image points (after refining them)
         if ret is True:
             corners = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-        return self.__check_chessboard(synthetic_chessboard, corners, type_dist)
+        return self.__check_chessboard(synthetic_chessboard, corners)
 
     def formatting_result(self, category, res):
         print("category:", category)
         print("detected chessboard corners:", res[0] / res[1], "total chessboard corners:", res[1], "distance:",
-              res[2] / max(res[1], 1))
-        print()
+              res[2] / max(res[1], 1), "\n")
 
 
 def generate_dataset(args, synthetic_object, background_color=0):
@@ -611,7 +612,7 @@ def main():
                         dest="rel_center_x", type=float)
     parser.add_argument("--rel_center_y", help="input relative board center y", default=".5", action="store",
                         dest="rel_center_y", type=float)
-    parser.add_argument("--metric", help="Metric for distance between result and gold ", default="l2", action="store",
+    parser.add_argument("--metric", help="Metric for distance between result and gold", default="l_inf", action="store",
                         dest="metric", choices=['l1', 'l2', 'l_inf', 'intersection_over_union'], type=str)
     parser.add_argument("--synthetic_object", help="synthetic object", default="charuco", action="store",
                         dest="synthetic_object", choices=['aruco', 'charuco', 'chessboard'], type=str)
@@ -638,16 +639,16 @@ def main():
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticCharuco(board_size=board_size, cell_img_size=cell_img_size,
                                             square_marker_length_rate=args.marker_length_rate)
-        checker = CharucoChecker(accuracy)
+        checker = CharucoChecker(accuracy, metric)
     elif args.synthetic_object == "aruco":
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticAruco(board_size=board_size, cell_img_size=cell_img_size,
                                           marker_separation=args.marker_length_rate)
-        checker = ArucoChecker(accuracy)
+        checker = ArucoChecker(accuracy, metric)
     elif args.synthetic_object == "chessboard":
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticChessboard(board_size=board_size, cell_img_size=cell_img_size)
-        checker = ChessboardChecker(accuracy)
+        checker = ChessboardChecker(accuracy, metric)
     else:
         synthetic_object = None
 
@@ -656,6 +657,8 @@ def main():
         generate_dataset(args, synthetic_object)
         if configuration == "generate":
             return
+
+    print("distance threshold:", checker.accuracy, "\n")
 
     list_folders = next(os.walk(dataset_path))[1]
     for folder in list_folders:
