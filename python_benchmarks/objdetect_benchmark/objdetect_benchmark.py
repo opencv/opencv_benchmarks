@@ -4,9 +4,16 @@
 Usage example:
 python objdetect_benchmark.py -p path
 -H, --help - show help
--p, --path - the path to the input/output of the dataset or detect statistics
--a, --accuracy - input accuracy (default 20 pixels)
+--configuration - script launch configuration (default generate_run)
+-p, --path - path to the input/output of the dataset or detect statistics
+-a, --accuracy - input accuracy, this is the object detection threshold (default 10 pixels)
 --metric - input norm (default l_inf)
+--marker_length_rate square marker length rate for charuco (default 0.5)
+--board_x - input board x size (default 6)
+--board_y - input board y size (default 6)
+--rel_center_x - relative x-axis location of the center of the board in the image (default 0.5)
+--rel_center_y - relative y-axis location of the center of the board in the image (default 0.5)
+--synthetic_object - type of synthetic object: aruco or charuco or chessboard (default charuco)
 """
 
 import argparse
@@ -608,13 +615,13 @@ def main():
                         action="store", dest="marker_length_rate", type=float)
     parser.add_argument("--board_x", help="input board x size", default="6", action="store", dest="board_x", type=int)
     parser.add_argument("--board_y", help="input board y size", default="6", action="store", dest="board_y", type=int)
-    parser.add_argument("--rel_center_x", help="input relative board center x", default=".5", action="store",
-                        dest="rel_center_x", type=float)
-    parser.add_argument("--rel_center_y", help="input relative board center y", default=".5", action="store",
-                        dest="rel_center_y", type=float)
+    parser.add_argument("--rel_center_x", help="the relative x-axis location of the center of the board in the image",
+                        default=".5", action="store", dest="rel_center_x", type=float)
+    parser.add_argument("--rel_center_y", help="the relative x-axis location of the center of the board in the image",
+                        default=".5", action="store", dest="rel_center_y", type=float)
     parser.add_argument("--metric", help="Metric for distance between result and gold", default="l_inf", action="store",
                         dest="metric", choices=['l1', 'l2', 'l_inf', 'intersection_over_union'], type=str)
-    parser.add_argument("--synthetic_object", help="synthetic object", default="charuco", action="store",
+    parser.add_argument("--synthetic_object", help="type of synthetic object", default="charuco", action="store",
                         dest="synthetic_object", choices=['aruco', 'charuco', 'chessboard'], type=str)
 
     args = parser.parse_args()
