@@ -260,49 +260,37 @@ def checkerboard(shape):
     return ((np.indices(shape).sum(axis=0) % 2) * 255).astype(dtype=np.uint8)
 
 
-def generate_checkerboard(rows_num, columns_num, block_size, base_color):
-    test = checkerboard([rows_num, columns_num])
-    test = cv.resize(test, (block_size * rows_num, block_size * columns_num), interpolation=cv.INTER_NEAREST)
-    cv.imshow("1", test)
-    image_width = block_size * columns_num
-    image_height = block_size * rows_num
-    inv_color = tuple(255 - val for val in base_color),
+class SyntheticAruco(SyntheticObject):
+    def __get_size(self, cell_img_size):
+        board_image_size = [0, 0]
+        pix = cell_img_size / (1. + self.marker_separation)
+        for i in range(0, 2):
+            board_image_size[i] = max(0, cell_img_size*(self.board_size[i]-2))
+            board_image_size[i] += pix*(1 + self.marker_separation/2)*min(2, self.board_size[i])
+            board_image_size[i] = round(board_image_size[i])
+        return board_image_size, pix
 
-    checker_board = np.zeros((image_height, image_width), np.uint8)
-    color_row = 0
-    color_column = 0
-
-    for i in range(0, image_height, block_size):
-        color_row = not color_row
-        color_column = color_row
-
-        for j in range(0, image_width, block_size):
-            checker_board[i:i + block_size, j:j + block_size] = inv_color if color_column else base_color
-            color_column = not color_column
-    return checker_board
-
-
-class SyntheticChessboard(SyntheticObject):
-    def __init__(self, *, board_size, cell_img_size):
+    def __init__(self, *, board_size, cell_img_size, marker_separation=0.5, dict_id=0):
         self.board_size = board_size
-        board_image_size = [board_size[0] * cell_img_size, board_size[1] * cell_img_size]
-        self.image = ((np.indices((board_size[1], board_size[0])).sum(axis=0) % 2) * 255).astype(dtype=np.uint8)
-        self.image = cv.resize(self.image, board_image_size, interpolation=cv.INTER_NEAREST)
-        # TODO: board_size means (x,y) for ChArUco and means (points_per_row,points_per_colum) for findChessboardCorners
-        self.chessboard_corners = np.zeros(((board_size[0] - 1) * (board_size[1] - 1), 2), np.float32)
-        self.chessboard_corners[:, :2] = np.mgrid[0:board_size[0] - 1, 0:board_size[1] - 1].T.reshape(-1, 2)
-        self.chessboard_corners *= cell_img_size
-        self.chessboard_corners += cell_img_size
-        self.fields = {"board_size": None, "chessboard_corners": None}
+        self.marker_separation = marker_separation
+        self.dict_id = dict_id
+        self.dict = cv.aruco.getPredefinedDictionary(dict_id)
+        self.grid_board = cv.aruco.GridBoard(board_size, 1., marker_separation, self.dict)
+        board_image_size, pix = self.__get_size(cell_img_size)
+        self.image = self.grid_board.generateImage(board_image_size)
+        self.aruco_corners = (np.array(self.grid_board.getObjPoints(), dtype=np.float32) * pix).reshape(-1, 3)[:, :-1]
+        self.aruco_ids = np.array(self.grid_board.getIds())
+        self.fields = {"board_size": None, "marker_separation": None, "dict_id": None, "aruco_corners": None,
+                       "aruco_ids": None}
         self.history = []
-        background = BackGroundObject(num_rows=int(self.image.shape[0] + 2*cell_img_size),
-                                      num_cols=int(self.image.shape[1] + 2*cell_img_size), color=255)
+        background = BackGroundObject(num_rows=int(self.image.shape[0] + 2*pix),
+                                      num_cols=int(self.image.shape[1] + 2*pix), color=255)
         pasting_object = PastingTransform(background_object=background)
         self.transform_object(pasting_object)
 
     def transform_object(self, transform_object):
         self.image = transform_object.transform_image(self.image)
-        self.chessboard_corners = np.array(transform_object.transform_points(self.chessboard_corners), dtype=np.float32)
+        self.aruco_corners = np.array(transform_object.transform_points(self.aruco_corners), dtype=np.float32)
         if transform_object.name != "":
             self.history.append(transform_object.name)
         return self
@@ -310,9 +298,11 @@ class SyntheticChessboard(SyntheticObject):
     def show(self, wait_key=0):
         assert self.image is not None
         image = np.copy(self.image)
-        chessboard_corners = self.chessboard_corners.reshape(-1, 1, 2)
-        cv.aruco.drawDetectedCornersCharuco(image, chessboard_corners)
-        cv.imshow("SyntheticChessboard", image)
+        aruco = np.array(self.aruco_corners.reshape(-1, 1, 4, 2), dtype=np.float32)
+        aruco = [el for el in aruco]
+
+        cv.aruco.drawDetectedMarkers(image, aruco)
+        cv.imshow("SyntheticAruco", image)
         cv.waitKey(wait_key)
 
     def write(self, path="test", filename="test"):
@@ -327,9 +317,51 @@ class SyntheticChessboard(SyntheticObject):
             data_loaded = json.load(fp)
             for name, value in data_loaded.items():
                 setattr(self, name, value)
-            self.chessboard_corners = np.asarray(self.chessboard_corners)
+            self.dict = cv.aruco.getPredefinedDictionary(self.dict_id)
+            self.aruco_ids = np.asarray(self.aruco_ids)
+            self.aruco_corners = np.asarray(self.aruco_corners)
             self.history = []
         self.image = cv.imread(path + "/" + filename + ".png", cv.IMREAD_GRAYSCALE)
+
+
+def check_aruco(synthetic_aruco, marker_corners, marker_ids, type_dist, accuracy):
+    gold = {}
+    gold_corners, gold_ids = synthetic_aruco.aruco_corners.reshape(-1, 4, 2), \
+        synthetic_aruco.aruco_ids
+    for marker_id, marker in zip(gold_ids, gold_corners):
+        gold[int(marker_id)] = marker
+    dist = 0.
+    detected_count = 0
+    total_count = len(gold_ids)
+    detected = {}
+    if len(marker_ids) > 0:
+        for marker_id, marker in zip(marker_ids, marker_corners):
+            detected[int(marker_id)] = marker.reshape(4, 2)
+        for gold_id in gold_ids:
+            gold_corner = gold_corners[int(gold_id)]
+            if int(gold_id) in detected:
+                corner = detected[int(gold_id)]
+                loc_dist = get_norm(gold_corner, corner, type_dist)
+                if loc_dist < accuracy:
+                    dist += loc_dist
+                    detected_count += 1
+    return detected_count, total_count, dist
+
+
+class ArucoChecker:
+    def __init__(self, accuracy=10):
+        self.accuracy = accuracy
+
+    def detect_and_check(self, synthetic_aruco, type_dist=TypeNorm.l_inf):
+        aruco_detector = cv.aruco.ArucoDetector(synthetic_aruco.grid_board.getDictionary())
+        marker_corners, marker_ids, _ = aruco_detector.detectMarkers(synthetic_aruco.image)
+        return check_aruco(synthetic_aruco, marker_corners, marker_ids, type_dist, self.accuracy)
+
+    def formatting_result(self, category, res):
+        print("category:", category, "accuracy:", self.accuracy)
+        print("category:", category, "accuracy:", self.accuracy)
+        print("detected aruco:", res[0] / res[1], "total aruco:", res[1], "distance:", res[2] / max(res[1], 1))
+        print()
 
 
 class SyntheticCharuco(SyntheticObject):
@@ -349,6 +381,10 @@ class SyntheticCharuco(SyntheticObject):
         self.fields = {"board_size": None, "square_marker_length_rate": None, "dict_id": None, "aruco_corners": None,
                        "aruco_ids": None, "chessboard_corners": None}
         self.history = []
+        background = BackGroundObject(num_rows=int(self.image.shape[0] + cell_img_size),
+                                      num_cols=int(self.image.shape[1] + cell_img_size), color=255)
+        pasting_object = PastingTransform(background_object=background)
+        self.transform_object(pasting_object)
 
     def transform_object(self, transform_object):
         self.image = transform_object.transform_image(self.image)
@@ -396,36 +432,13 @@ class CharucoChecker:
     def __init__(self, accuracy=10):
         self.accuracy = accuracy
 
-    def _check_aruco(self, synthetic_charuco, marker_corners, marker_ids, type_dist):
-        gold = {}
-        gold_corners, gold_ids = synthetic_charuco.aruco_corners.reshape(-1, 4, 2), \
-            synthetic_charuco.aruco_ids
-        for marker_id, marker in zip(gold_ids, gold_corners):
-            gold[int(marker_id)] = marker
-        dist = 0.
-        detected_count = 0
-        total_count = len(gold_ids)
-        detected = {}
-        if len(marker_ids) > 0:
-            for marker_id, marker in zip(marker_ids, marker_corners):
-                detected[int(marker_id)] = marker.reshape(4, 2)
-            for gold_id in gold_ids:
-                gold_corner = gold_corners[int(gold_id)]
-                if int(gold_id) in detected:
-                    corner = detected[int(gold_id)]
-                    loc_dist = get_norm(gold_corner, corner, type_dist)
-                    if loc_dist < self.accuracy:
-                        dist += loc_dist
-                        detected_count += 1
-        return detected_count, total_count, dist
-
     def _check_charuco(self, synthetic_charuco, charuco_corners, charuco_ids, type_dist):
         gold = {}
         gold_corners = synthetic_charuco.chessboard_corners.reshape(-1, 2)
         for charuco_id, charuco_corner in zip(range(len(gold_corners)), gold_corners):
             gold[charuco_id] = charuco_corner
         detected = {}
-        if len(charuco_ids) > 0:
+        if charuco_ids is not None and len(charuco_ids) > 0:
             for charuco_id, charuco_corner in zip(charuco_ids, charuco_corners):
                 detected[int(charuco_id)] = charuco_corner
         dist = 0.
@@ -441,15 +454,11 @@ class CharucoChecker:
                     detected_count += 1
         return detected_count, total_count, dist
 
-    def _detect_and_check_aruco(self, synthetic_charuco, type_dist=TypeNorm.l_inf):
-        aruco_detector = cv.aruco.ArucoDetector(synthetic_charuco.charuco_board.getDictionary())
-        marker_corners, marker_ids, _ = synthetic_charuco.aruco_detector.detectMarkers(synthetic_charuco.image)
-        return self.__check_aruco(synthetic_charuco, marker_corners, marker_ids, type_dist)
-
     def detect_and_check(self, synthetic_charuco, type_dist=TypeNorm.l_inf):
         charuco_detector = cv.aruco.CharucoDetector(synthetic_charuco.charuco_board)
         charuco_corners, charuco_ids, marker_corners, marker_ids = charuco_detector.detectBoard(synthetic_charuco.image)
-        ar_detected, ar_total, ar_dist = self._check_aruco(synthetic_charuco, marker_corners, marker_ids, type_dist)
+        ar_detected, ar_total, ar_dist = check_aruco(synthetic_charuco, marker_corners, marker_ids, type_dist,
+                                                     self.accuracy)
         ch_detected, ch_total, ch_dist = self._check_charuco(synthetic_charuco, charuco_corners, charuco_ids, type_dist)
         return ar_detected, ar_total, ar_dist, ch_detected, ch_total, ch_dist
 
@@ -458,6 +467,56 @@ class CharucoChecker:
         print("detected aruco:", res[0] / res[1], "total aruco:", res[1], "distance:", res[2] / max(res[1], 1),
               "detected charuco:", res[3] / res[4], "total charuco:", res[4], "distance:", res[5] / max(res[4], 1))
         print()
+
+
+class SyntheticChessboard(SyntheticObject):
+    def __init__(self, *, board_size, cell_img_size):
+        self.board_size = board_size
+        board_image_size = [board_size[0] * cell_img_size, board_size[1] * cell_img_size]
+        self.image = ((np.indices((board_size[1], board_size[0])).sum(axis=0) % 2) * 255).astype(dtype=np.uint8)
+        self.image = cv.resize(self.image, board_image_size, interpolation=cv.INTER_NEAREST)
+        # TODO: board_size means (x,y) for ChArUco and means (points_per_row,points_per_colum) for findChessboardCorners
+        self.chessboard_corners = np.zeros(((board_size[0] - 1) * (board_size[1] - 1), 2), np.float32)
+        self.chessboard_corners[:, :2] = np.mgrid[0:board_size[0] - 1, 0:board_size[1] - 1].T.reshape(-1, 2)
+        self.chessboard_corners *= cell_img_size
+        self.chessboard_corners += cell_img_size
+        self.fields = {"board_size": None, "chessboard_corners": None}
+        self.history = []
+        background = BackGroundObject(num_rows=int(self.image.shape[0] + cell_img_size),
+                                      num_cols=int(self.image.shape[1] + cell_img_size), color=255)
+        pasting_object = PastingTransform(background_object=background)
+        self.transform_object(pasting_object)
+
+    def transform_object(self, transform_object):
+        self.image = transform_object.transform_image(self.image)
+        self.chessboard_corners = np.array(transform_object.transform_points(self.chessboard_corners), dtype=np.float32)
+        if transform_object.name != "":
+            self.history.append(transform_object.name)
+        return self
+
+    def show(self, wait_key=0):
+        assert self.image is not None
+        image = np.copy(self.image)
+        chessboard_corners = self.chessboard_corners.reshape(-1, 1, 2)
+        cv.aruco.drawDetectedCornersCharuco(image, chessboard_corners)
+        cv.imshow("SyntheticChessboard", image)
+        cv.waitKey(wait_key)
+
+    def write(self, path="test", filename="test"):
+        for name in self.fields:
+            self.fields[name] = getattr(self, name)
+        with open(path + "/" + filename + '.txt', 'w') as fp:
+            json.dump(self.fields, fp, cls=NumpyEncoder)
+        cv.imwrite(path + "/" + filename + ".png", self.image)
+
+    def read(self, path="test", filename="test"):
+        with open(path + "/" + filename + ".txt", 'r') as fp:
+            data_loaded = json.load(fp)
+            for name, value in data_loaded.items():
+                setattr(self, name, value)
+            self.chessboard_corners = np.asarray(self.chessboard_corners)
+            self.history = []
+        self.image = cv.imread(path + "/" + filename + ".png", cv.IMREAD_GRAYSCALE)
 
 
 class ChessboardChecker:
@@ -500,8 +559,8 @@ class ChessboardChecker:
 
 def generate_dataset(args, synthetic_object, background_color=0):
     output = args.output
-    background = BackGroundObject(num_rows=int(synthetic_object.image.shape[0] * 3.),
-                                  num_cols=int(synthetic_object.image.shape[1] * 3.), color=background_color)
+    background = BackGroundObject(num_rows=int(synthetic_object.image.shape[0] * 2.),
+                                  num_cols=int(synthetic_object.image.shape[1] * 2.), color=background_color)
     rel_center_x, rel_center_y = args.rel_center_x, args.rel_center_y
     pasting_object = PastingTransform(background_object=background, rel_center=(rel_center_y, rel_center_x))
     synthetic_object.transform_object(pasting_object)
@@ -532,10 +591,9 @@ def generate_dataset(args, synthetic_object, background_color=0):
             folder = '_'.join(synthetic_object.history)
             if not os.path.exists(output + "/" + folder):
                 os.mkdir(output + "/" + folder)
-            # print(folder)
             synthetic_object.write(output + "/" + folder, str(count) + '_' + str(angle))
             count += 1
-            # charuco_object.show()
+            # synthetic_object.show()
 
 
 def main():
@@ -579,14 +637,18 @@ def main():
     elif args.metric == "intersection_over_union":
         metric = TypeNorm.intersection_over_union
 
-    cell_img_size = 100
+    cell_img_size = 70
 
     if args.synthetic_object == "charuco":
         board_size = [args.board_x, args.board_y]
-        marker_length_rate = args.marker_length_rate
         synthetic_object = SyntheticCharuco(board_size=board_size, cell_img_size=cell_img_size,
-                                            square_marker_length_rate=marker_length_rate)
+                                            square_marker_length_rate=args.marker_length_rate)
         checker = CharucoChecker(accuracy)
+    elif args.synthetic_object == "aruco":
+        board_size = [args.board_x, args.board_y]
+        synthetic_object = SyntheticAruco(board_size=board_size, cell_img_size=cell_img_size,
+                                          marker_separation=args.marker_length_rate)
+        checker = ArucoChecker(accuracy)
     elif args.synthetic_object == "chessboard":
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticChessboard(board_size=board_size, cell_img_size=cell_img_size)
