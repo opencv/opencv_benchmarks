@@ -289,8 +289,8 @@ class SyntheticAruco(SyntheticObject):
         self.fields = {"board_size": None, "marker_separation": None, "dict_id": None, "aruco_corners": None,
                        "aruco_ids": None}
         self.history = []
-        background = BackGroundObject(num_rows=int(self.image.shape[0] + 2*pix),
-                                      num_cols=int(self.image.shape[1] + 2*pix), color=255)
+        background = BackGroundObject(num_rows=int(self.image.shape[0] + cell_img_size),
+                                      num_cols=int(self.image.shape[1] + cell_img_size), color=255)
         pasting_object = PastingTransform(background_object=background)
         self.transform_object(pasting_object)
 
@@ -613,6 +613,8 @@ def main():
                         type=float)
     parser.add_argument("--marker_length_rate", help="square marker length rate for charuco", default=".5",
                         action="store", dest="marker_length_rate", type=float)
+    parser.add_argument("--cell_img_size", help="the size of one board cell in the image in pixels", default="100",
+                        action="store", dest="cell_img_size", type=int)
     parser.add_argument("--board_x", help="input board x size", default="6", action="store", dest="board_x", type=int)
     parser.add_argument("--board_y", help="input board y size", default="6", action="store", dest="board_y", type=int)
     parser.add_argument("--rel_center_x", help="the relative x-axis location of the center of the board in the image",
@@ -640,7 +642,7 @@ def main():
     elif args.metric == "intersection_over_union":
         metric = TypeNorm.intersection_over_union
 
-    cell_img_size = 70
+    cell_img_size = args.cell_img_size
 
     if args.synthetic_object == "charuco":
         board_size = [args.board_x, args.board_y]
