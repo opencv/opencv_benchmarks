@@ -25,6 +25,7 @@ import itertools
 import glob
 import os
 import cv2 as cv
+import pandas as pd
 
 # l_1 - https://en.wikipedia.org/wiki/Norm_(mathematics)
 # l_inf - Chebyshev norm https://en.wikipedia.org/wiki/Chebyshev_distance
@@ -192,7 +193,7 @@ class PastingTransform(TransformObject):
         self.col_offset = int(self.background_image.shape[1] * self.rel_center[1] - image.shape[1] / 2)
         background_image = np.copy(self.background_image)
         background_image[self.row_offset:self.row_offset + image.shape[0],
-        self.col_offset:self.col_offset + image.shape[1]] = image
+                         self.col_offset:self.col_offset + image.shape[1]] = image
         image = background_image
         return image
 
@@ -255,15 +256,11 @@ class SyntheticObject:
 
 class BackGroundObject(SyntheticObject):
     def __init__(self, *, num_rows, num_cols, color=0):
-        self.image = np.zeros((num_rows, num_cols), dtype=np.uint8)+color
+        self.image = np.zeros((num_rows, num_cols), dtype=np.uint8) + color
 
     def show(self, wait_key=0):
         cv.imshow("BackGroundObject", self.image)
         cv.waitKey(wait_key)
-
-
-def checkerboard(shape):
-    return ((np.indices(shape).sum(axis=0) % 2) * 255).astype(dtype=np.uint8)
 
 
 class SyntheticAruco(SyntheticObject):
@@ -271,8 +268,8 @@ class SyntheticAruco(SyntheticObject):
         board_image_size = [0, 0]
         pix = cell_img_size / (1. + self.marker_separation)
         for i in range(0, 2):
-            board_image_size[i] = max(0, cell_img_size*(self.board_size[i]-2))
-            board_image_size[i] += pix*(1 + self.marker_separation/2)*min(2, self.board_size[i])
+            board_image_size[i] = max(0, cell_img_size * (self.board_size[i] - 2))
+            board_image_size[i] += pix * (1 + self.marker_separation / 2) * min(2, self.board_size[i])
             board_image_size[i] = round(board_image_size[i])
         return board_image_size, pix
 
@@ -330,44 +327,70 @@ class SyntheticAruco(SyntheticObject):
         self.image = cv.imread(path + "/" + filename + ".png", cv.IMREAD_GRAYSCALE)
 
 
-def check_aruco(synthetic_aruco, marker_corners, marker_ids, accuracy, type_dist):
-    gold = {}
-    gold_corners, gold_ids = synthetic_aruco.aruco_corners.reshape(-1, 4, 2), \
-        synthetic_aruco.aruco_ids
-    for marker_id, marker in zip(gold_ids, gold_corners):
-        gold[int(marker_id)] = marker
-    dist = 0.
-    detected_count = 0
-    total_count = len(gold_ids)
-    detected = {}
-    if len(marker_ids) > 0:
-        for marker_id, marker in zip(marker_ids, marker_corners):
-            detected[int(marker_id)] = marker.reshape(4, 2)
-        for gold_id in gold_ids:
-            gold_corner = gold_corners[int(gold_id)]
-            if int(gold_id) in detected:
-                corner = detected[int(gold_id)]
-                loc_dist = get_norm(gold_corner, corner, type_dist)
-                if loc_dist < accuracy:
-                    dist += loc_dist
-                    detected_count += 1
-    return detected_count, total_count, dist
-
-
-class ArucoChecker:
+class Checker:
     def __init__(self, accuracy, type_dist):
         self.accuracy = accuracy
         self.type_dist = type_dist
 
-    def detect_and_check(self, synthetic_aruco):
+    @staticmethod
+    def _formatting_dict(input_dict):
+        return {}
+
+    def formatting_result(self, list_detected):
+        result = []
+        total_dict = {"category": "all"}
+        for dict_detected in list_detected:
+            dictionary = self._formatting_dict(dict_detected)
+            result.append(dictionary)
+            [update_dict(total_dict, key, dict_detected[key]) for key in dict_detected]
+
+        result.append(self._formatting_dict(total_dict))
+        print(pd.DataFrame(result).to_string(index=False))
+
+
+class ArucoChecker(Checker):
+    @staticmethod
+    def check_aruco(synthetic_aruco, marker_corners, marker_ids, accuracy, type_dist):
+        gold = {}
+        gold_corners, gold_ids = synthetic_aruco.aruco_corners.reshape(-1, 4, 2), \
+            synthetic_aruco.aruco_ids
+        for marker_id, marker in zip(gold_ids, gold_corners):
+            gold[int(marker_id)] = marker
+        dist = 0.
+        detected_count = 0
+        total_count = len(gold_ids)
+        detected = {}
+        if marker_ids is not None and len(marker_ids) > 0:
+            for marker_id, marker in zip(marker_ids, marker_corners):
+                detected[int(marker_id)] = marker.reshape(4, 2)
+            for gold_id in gold_ids:
+                gold_corner = gold_corners[int(gold_id)]
+                if int(gold_id) in detected:
+                    corner = detected[int(gold_id)]
+                    loc_dist = get_norm(gold_corner, corner, type_dist)
+                    if loc_dist < accuracy:
+                        dist += loc_dist
+                        detected_count += 1
+        return detected_count, total_count, dist
+
+    def detect_and_check(self, synthetic_aruco, dict_res):
         aruco_detector = cv.aruco.ArucoDetector(synthetic_aruco.grid_board.getDictionary())
         marker_corners, marker_ids, _ = aruco_detector.detectMarkers(synthetic_aruco.image)
-        return check_aruco(synthetic_aruco, marker_corners, marker_ids, self.accuracy, self.type_dist)
+        ar_detected, ar_total, ar_dist = ArucoChecker.check_aruco(synthetic_aruco, marker_corners, marker_ids,
+                                                                  self.accuracy, self.type_dist)
+        update_dict(dict_res, "total detected aruco corners", ar_detected)
+        update_dict(dict_res, "total aruco corners", ar_total)
+        update_dict(dict_res, "total aruco distance", ar_dist)
 
-    def formatting_result(self, category, res):
-        print("category:", category)
-        print("detected aruco:", res[0] / res[1], "total aruco:", res[1], "distance:", res[2] / max(res[1], 1))
-        print()
+    @staticmethod
+    def _formatting_dict(input_dict):
+        output_dict = {"category": input_dict["category"],
+                       "detected aruco corners":
+                       input_dict["total detected aruco corners"] / max(1, input_dict["total aruco corners"]),
+                       "total detected aruco corners": input_dict["total detected aruco corners"],
+                       "total aruco corners": input_dict["total aruco corners"], "average aruco error":
+                       input_dict["total aruco distance"] / max(1, input_dict["total detected aruco corners"])}
+        return output_dict
 
 
 class SyntheticCharuco(SyntheticObject):
@@ -434,11 +457,7 @@ class SyntheticCharuco(SyntheticObject):
         self.image = cv.imread(path + "/" + filename + ".png", cv.IMREAD_GRAYSCALE)
 
 
-class CharucoChecker:
-    def __init__(self, accuracy, type_dist):
-        self.accuracy = accuracy
-        self.type_dist = type_dist
-
+class CharucoChecker(Checker):
     def _check_charuco(self, synthetic_charuco, charuco_corners, charuco_ids):
         gold = {}
         gold_corners = synthetic_charuco.chessboard_corners.reshape(-1, 2)
@@ -461,19 +480,37 @@ class CharucoChecker:
                     detected_count += 1
         return detected_count, total_count, dist
 
-    def detect_and_check(self, synthetic_charuco):
+    def detect_and_check(self, synthetic_charuco, dict_res):
         charuco_detector = cv.aruco.CharucoDetector(synthetic_charuco.charuco_board)
         charuco_corners, charuco_ids, marker_corners, marker_ids = charuco_detector.detectBoard(synthetic_charuco.image)
-        ar_detected, ar_total, ar_dist = check_aruco(synthetic_charuco, marker_corners, marker_ids, self.accuracy,
-                                                     self.type_dist)
+        ar_detected, ar_total, ar_dist = ArucoChecker.check_aruco(synthetic_charuco, marker_corners, marker_ids,
+                                                                  self.accuracy, self.type_dist)
+        update_dict(dict_res, "total detected aruco corners", ar_detected)
+        update_dict(dict_res, "total aruco corners", ar_total)
+        update_dict(dict_res, "total aruco distance", ar_dist)
+
         ch_detected, ch_total, ch_dist = self._check_charuco(synthetic_charuco, charuco_corners, charuco_ids)
+        update_dict(dict_res, "total detected chessboard corners", ch_detected)
+        update_dict(dict_res, "total chessboard corners", ch_total)
+        update_dict(dict_res, "total distance", ch_dist)
         return ar_detected, ar_total, ar_dist, ch_detected, ch_total, ch_dist
 
-    def formatting_result(self, category, res):
-        print("category:", category)
-        print("detected aruco:", res[0] / res[1], "total aruco:", res[1], "distance:", res[2] / max(res[1], 1),
-              "detected charuco:", res[3] / res[4], "total charuco:", res[4], "distance:", res[5] / max(res[4], 1))
-        print()
+    @staticmethod
+    def _formatting_dict(input_dict):
+        output_dict = {"category": input_dict["category"],
+                       "detected aruco corners":
+                       input_dict["total detected aruco corners"] / max(1, input_dict["total aruco corners"]),
+                       "total detected aruco corners": input_dict["total detected aruco corners"],
+                       "total aruco corners": input_dict["total aruco corners"], "average aruco error":
+                       input_dict["total aruco distance"] / max(1, input_dict["total detected aruco corners"]),
+
+                       "detected chessboard corners":
+                       input_dict["total detected chessboard corners"] / max(1, input_dict["total chessboard corners"]),
+                       "total detected chessboard corners": input_dict["total detected chessboard corners"],
+                       "total chessboard corners": input_dict["total chessboard corners"],
+                       "average error":
+                       input_dict["total distance"] / max(1, input_dict["total detected chessboard corners"])}
+        return output_dict
 
 
 class SyntheticChessboard(SyntheticObject):
@@ -526,11 +563,16 @@ class SyntheticChessboard(SyntheticObject):
         self.image = cv.imread(path + "/" + filename + ".png", cv.IMREAD_GRAYSCALE)
 
 
-class ChessboardChecker:
-    def __init__(self, accuracy, type_dist):
-        self.accuracy = accuracy
-        self.type_dist = type_dist
+def update_dict(dictionary, key, value):
+    if type(value) is str:
+        return
+    if key in dictionary:
+        dictionary[key] += value
+    else:
+        dictionary[key] = value
 
+
+class ChessboardChecker(Checker):
     def __check_chessboard(self, synthetic_chessboard, corners):
         gold = {}
         gold_corners = synthetic_chessboard.chessboard_corners.reshape(-1, 2)
@@ -545,22 +587,30 @@ class ChessboardChecker:
                     detected_count += 1
         return detected_count, total_count, dist
 
-    def detect_and_check(self, synthetic_chessboard):
+    def detect_and_check(self, synthetic_chessboard, dict_res):
         criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
         gray = synthetic_chessboard.image
         # Find the chess board corners
-        chessboard = (synthetic_chessboard.board_size[1]-1, synthetic_chessboard.board_size[0]-1)
+        chessboard = (synthetic_chessboard.board_size[1] - 1, synthetic_chessboard.board_size[0] - 1)
         ret, corners = cv.findChessboardCorners(gray, chessboard, criteria)
 
         # If found, add object points, image points (after refining them)
         if ret is True:
             corners = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-        return self.__check_chessboard(synthetic_chessboard, corners)
+        detected_count, total_count, dist = self.__check_chessboard(synthetic_chessboard, corners)
+        update_dict(dict_res, "total detected chessboard corners", detected_count)
+        update_dict(dict_res, "total chessboard corners", total_count)
+        update_dict(dict_res, "total distance", dist)
 
-    def formatting_result(self, category, res):
-        print("category:", category)
-        print("detected chessboard corners:", res[0] / res[1], "total chessboard corners:", res[1], "distance:",
-              res[2] / max(res[1], 1), "\n")
+    @staticmethod
+    def _formatting_dict(input_dict):
+        output_dict = {"category": input_dict["category"], "detected chessboard corners":
+                       input_dict["total detected chessboard corners"] / max(1, input_dict["total chessboard corners"]),
+                       "total detected chessboard corners": input_dict["total detected chessboard corners"],
+                       "total chessboard corners": input_dict["total chessboard corners"],
+                       "average error":
+                       input_dict["total distance"] / max(1, input_dict["total detected chessboard corners"])}
+        return output_dict
 
 
 def generate_dataset(args, synthetic_object, background_color=0):
@@ -581,8 +631,8 @@ def generate_dataset(args, synthetic_object, background_color=0):
     perspective_t3 = PerspectiveTransform(img_size=synthetic_object.image.shape, yaw=0.5, pitch=0.5)
     undistort_t = UndistortFisheyeTransform(img_size=synthetic_object.image.shape)
     transforms_list = [[perspective_t1, perspective_t2, perspective_t3, empty_t],
-                       [undistort_t, empty_t],
-                       [blur_t, gauss_noise_t, empty_t]]
+                      [undistort_t, empty_t],
+                      [blur_t, gauss_noise_t, empty_t]]
     transforms_comb = list(itertools.product(*transforms_list))
 
     count = 0
@@ -670,15 +720,16 @@ def main():
     print("distance threshold:", checker.accuracy, "\n")
 
     list_folders = next(os.walk(dataset_path))[1]
+    result = []
     for folder in list_folders:
         configs = glob.glob(dataset_path + '/' + folder + '/*.json')
-        res = None
+        category_result = {"category": folder}
         for config in configs:
             synthetic_object.read(dataset_path + '/' + folder, config.split('/')[-1].split('\\')[-1].split('.')[0])
             # charuco_object.show()
-            res = res + np.array(checker.detect_and_check(synthetic_object)) if res is not None \
-                else np.array(checker.detect_and_check(synthetic_object))
-        checker.formatting_result(folder, res)
+            checker.detect_and_check(synthetic_object, category_result)
+        result.append(category_result)
+    checker.formatting_result(result)
 
 
 if __name__ == '__main__':
