@@ -349,6 +349,18 @@ class Checker:
 
 
 class ArucoChecker(Checker):
+    def __init__(self, accuracy, type_dist, path="", read_params=True):
+        super().__init__(accuracy, type_dist)
+        self.aruco_params = cv.aruco.DetectorParameters()
+        if read_params and os.path.isfile(path+"/aruco_params.yml"):
+            fs_read = cv.FileStorage(path+"/aruco_params.yml", cv.FileStorage_READ)
+            self.aruco_params.readDetectorParameters(fs_read.root())
+            fs_read.release()
+        else:
+            fs_write = cv.FileStorage(path+"/aruco_params.yml", cv.FileStorage_WRITE)
+            self.aruco_params.writeDetectorParameters(fs_write)
+            fs_write.release()
+
     @staticmethod
     def check_aruco(synthetic_aruco, marker_corners, marker_ids, accuracy, type_dist):
         gold = {}
@@ -374,7 +386,7 @@ class ArucoChecker(Checker):
         return detected_count, total_count, dist
 
     def detect_and_check(self, synthetic_aruco, dict_res):
-        aruco_detector = cv.aruco.ArucoDetector(synthetic_aruco.grid_board.getDictionary())
+        aruco_detector = cv.aruco.ArucoDetector(synthetic_aruco.grid_board.getDictionary(), self.aruco_params)
         marker_corners, marker_ids, _ = aruco_detector.detectMarkers(synthetic_aruco.image)
         ar_detected, ar_total, ar_dist = ArucoChecker.check_aruco(synthetic_aruco, marker_corners, marker_ids,
                                                                   self.accuracy, self.type_dist)
@@ -703,7 +715,7 @@ def main():
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticAruco(board_size=board_size, cell_img_size=cell_img_size,
                                           marker_separation=args.marker_length_rate)
-        checker = ArucoChecker(accuracy, metric)
+        checker = ArucoChecker(accuracy, metric, dataset_path)
     elif args.synthetic_object == "chessboard":
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticChessboard(board_size=board_size, cell_img_size=cell_img_size)
