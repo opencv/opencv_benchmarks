@@ -26,6 +26,8 @@ import glob
 import os
 import cv2 as cv
 import pandas as pd
+import datetime
+import matplotlib.pyplot as plt
 
 # l_1 - https://en.wikipedia.org/wiki/Norm_(mathematics)
 # l_inf - Chebyshev norm https://en.wikipedia.org/wiki/Chebyshev_distance
@@ -127,7 +129,7 @@ class RotateTransform(TransformObject):
         self.angle = angle
         self.rel_center = rel_center
         self.rot_mat = None
-        self.name = "rotate"
+        self.name = ""
 
     def transform_image(self, image):
         self.rot_mat = cv.getRotationMatrix2D(
@@ -327,16 +329,37 @@ class SyntheticAruco(SyntheticObject):
         self.image = cv.imread(path + "/" + filename + ".png", cv.IMREAD_GRAYSCALE)
 
 
+def show_distances(distances):
+    plt.rcParams["figure.figsize"] = (20, 10)
+    plt.rcParams["figure.subplot.bottom"] = 0.4
+    plt.rcParams["figure.subplot.left"] = 0.03
+    plt.rcParams["figure.subplot.right"] = 0.99
+    max_col = 80
+    tmp = [list(distances.keys()), list(distances.values())]
+    for i in range(0, len(tmp[0]), max_col):
+        data_frame = pd.DataFrame({"name": tmp[0][i:i + max_col], "distances": tmp[1][i:i + max_col]})
+        data_frame.plot.bar(x='name', y='distances')
+        plt.show()
+
+
+def read_distances(filename):
+    distances = {}
+    with open(filename, 'r') as fp:
+        distances = json.load(fp)
+    return distances
+
+
 class Checker:
-    def __init__(self, accuracy, type_dist):
+    def __init__(self, accuracy, type_dist, path):
         self.accuracy = accuracy
         self.type_dist = type_dist
+        self.path = path
 
     @staticmethod
     def _formatting_dict(input_dict):
         return {}
 
-    def formatting_result(self, list_detected):
+    def formatting_result(self, list_detected, distances):
         result = []
         total_dict = {"category": "all"}
         for dict_detected in list_detected:
@@ -346,11 +369,14 @@ class Checker:
 
         result.append(self._formatting_dict(total_dict))
         print(pd.DataFrame(result).to_string(index=False))
+        with open(self.path + "/" + "distances_" +
+                  datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + '.json', 'w') as fp:
+            json.dump(distances, fp, cls=NumpyEncoder)
 
 
 class ArucoChecker(Checker):
     def __init__(self, accuracy, type_dist, path="", read_params=True):
-        super().__init__(accuracy, type_dist)
+        super().__init__(accuracy, type_dist, path)
         self.aruco_params = cv.aruco.DetectorParameters()
         if read_params and os.path.isfile(path+"/aruco_params.yml"):
             fs_read = cv.FileStorage(path+"/aruco_params.yml", cv.FileStorage_READ)
@@ -393,6 +419,8 @@ class ArucoChecker(Checker):
         update_dict(dict_res, "total detected aruco corners", ar_detected)
         update_dict(dict_res, "total aruco corners", ar_total)
         update_dict(dict_res, "total aruco distance", ar_dist)
+        average_distance = (ar_dist + abs(ar_total - ar_detected)*self.accuracy) / ar_total
+        return {"aruco": average_distance}
 
     @staticmethod
     def _formatting_dict(input_dict):
@@ -505,7 +533,6 @@ class CharucoChecker(Checker):
         update_dict(dict_res, "total detected chessboard corners", ch_detected)
         update_dict(dict_res, "total chessboard corners", ch_total)
         update_dict(dict_res, "total distance", ch_dist)
-        return ar_detected, ar_total, ar_dist, ch_detected, ch_total, ch_dist
 
     @staticmethod
     def _formatting_dict(input_dict):
@@ -578,10 +605,7 @@ class SyntheticChessboard(SyntheticObject):
 def update_dict(dictionary, key, value):
     if type(value) is str:
         return
-    if key in dictionary:
-        dictionary[key] += value
-    else:
-        dictionary[key] = value
+    dictionary[key] = dictionary.get(key, 0.) + value
 
 
 class ChessboardChecker(Checker):
@@ -647,20 +671,20 @@ def generate_dataset(args, synthetic_object, background_color=0):
                       [blur_t, gauss_noise_t, empty_t]]
     transforms_comb = list(itertools.product(*transforms_list))
 
-    count = 0
-    for angle in range(0, 360, 31):
-        for transforms in transforms_comb:
+    dictionary = {}
+    for transforms in transforms_comb:
+        for angle in range(0, 360, 31):
             synthetic_object.read(output)
             rotate_t = RotateTransform(angle=angle, rel_center=(rel_center_x, rel_center_y))
             synthetic_object.transform_object(rotate_t)
             for transform in transforms:
                 synthetic_object.transform_object(transform)
             folder = '_'.join(synthetic_object.history)
+            dictionary[folder] = dictionary.get(folder, -1) + 1
             if not os.path.exists(output + "/" + folder):
                 os.mkdir(output + "/" + folder)
-            synthetic_object.write(output + "/" + folder, str(count) + '_' + str(angle))
-            count += 1
-            # synthetic_object.show()
+            synthetic_object.write(output + "/" + folder, folder + '_' + str(dictionary[folder]))
+        # synthetic_object.show()
 
 
 def main():
@@ -668,9 +692,11 @@ def main():
     parser = argparse.ArgumentParser(description="augmentation benchmark", add_help=False)
     parser.add_argument("-H", "--help", help="show help", action="store_true", dest="show_help")
     parser.add_argument("--configuration", help="script launch configuration", default="generate_run", action="store",
-                        dest="configuration", choices=['generate_run', 'generate', 'run'], type=str)
+                        dest="configuration", choices=['generate_run', 'generate', 'run', 'show_distance'], type=str)
     parser.add_argument("-p", "--path", help="input/output dataset path", default="", action="store",
                         dest="dataset_path")
+    parser.add_argument("-d1", help="d1", default="", action="store", dest="d1")
+    parser.add_argument("-d2", help="d2", default="", action="store", dest="d2")
     parser.add_argument("-a", "--accuracy", help="input accuracy", default="10", action="store", dest="accuracy",
                         type=float)
     parser.add_argument("--marker_length_rate", help="square marker length rate for charuco", default=".5",
@@ -710,7 +736,7 @@ def main():
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticCharuco(board_size=board_size, cell_img_size=cell_img_size,
                                             square_marker_length_rate=args.marker_length_rate)
-        checker = CharucoChecker(accuracy, metric)
+        checker = CharucoChecker(accuracy, metric, dataset_path)
     elif args.synthetic_object == "aruco":
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticAruco(board_size=board_size, cell_img_size=cell_img_size,
@@ -719,7 +745,7 @@ def main():
     elif args.synthetic_object == "chessboard":
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticChessboard(board_size=board_size, cell_img_size=cell_img_size)
-        checker = ChessboardChecker(accuracy, metric)
+        checker = ChessboardChecker(accuracy, metric, dataset_path)
     else:
         synthetic_object = None
 
@@ -728,20 +754,31 @@ def main():
         generate_dataset(args, synthetic_object)
         if configuration == "generate":
             return
+    elif configuration == "show_distance":
+        distances1 = read_distances(dataset_path+'/'+args.d1)
+        if args.d2 != "":
+            distances2 = read_distances(dataset_path + '/' + args.d2)
+            distances1 = {k: distances1.get(k, 0) - distances2.get(k, 0) for k in set(distances1) & set(distances2)}
+        show_distances(distances1)
+        return
 
     print("distance threshold:", checker.accuracy, "\n")
 
     list_folders = next(os.walk(dataset_path))[1]
     result = []
+    distances = {}
     for folder in list_folders:
         configs = glob.glob(dataset_path + '/' + folder + '/*.json')
         category_result = {"category": folder}
         for config in configs:
-            synthetic_object.read(dataset_path + '/' + folder, config.split('/')[-1].split('\\')[-1].split('.')[0])
+            config_name = config.split('/')[-1].split('\\')[-1].split('.')[0]
+            synthetic_object.read(dataset_path + '/' + folder, config_name)
             # charuco_object.show()
-            checker.detect_and_check(synthetic_object, category_result)
+            distance = checker.detect_and_check(synthetic_object, category_result)
+            for key, value in distance.items():
+                distances[key + "_" + config_name] = value
         result.append(category_result)
-    checker.formatting_result(result)
+    checker.formatting_result(result, distances)
 
 
 if __name__ == '__main__':
