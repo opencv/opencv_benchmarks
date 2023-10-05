@@ -44,6 +44,13 @@ def get_norm(gold_corners, corners, type_dist):
     raise TypeError("this TypeNorm isn't supported")
 
 
+def get_max_error(accuracy, type_dist):
+    if type_dist is TypeNorm.l1 or TypeNorm.l2 or TypeNorm.l3 or TypeNorm.l_inf:
+        return accuracy
+    if type_dist is TypeNorm.intersection_over_union:
+        return 1
+    raise TypeError("this TypeNorm isn't supported")
+
 def get_synthetic_rt(yaw, pitch, distance):
     rvec = np.zeros((3, 1), np.float64)
     tvec = np.zeros((3, 1), np.float64)
@@ -330,6 +337,13 @@ class SyntheticAruco(SyntheticObject):
 
 
 def show_distances(distances):
+    data_frame = pd.DataFrame(distances.values())
+    data_frame.hist(bins=50)
+    plt.title('')
+    plt.xlabel('error')
+    plt.ylabel('frequency')
+    plt.show()
+
     plt.rcParams["figure.figsize"] = (20, 10)
     plt.rcParams["figure.subplot.bottom"] = 0.4
     plt.rcParams["figure.subplot.left"] = 0.03
@@ -398,17 +412,21 @@ class ArucoChecker(Checker):
         detected_count = 0
         total_count = len(gold_ids)
         detected = {}
+        distances = {}
         if marker_ids is not None and len(marker_ids) > 0:
             for marker_id, marker in zip(marker_ids, marker_corners):
                 detected[int(marker_id)] = marker.reshape(4, 2)
-            for gold_id in gold_ids:
-                gold_corner = gold_corners[int(gold_id)]
-                if int(gold_id) in detected:
-                    corner = detected[int(gold_id)]
-                    loc_dist = get_norm(gold_corner, corner, type_dist)
-                    if loc_dist < accuracy:
-                        dist += loc_dist
-                        detected_count += 1
+        max_error = get_max_error(accuracy, type_dist)
+        for gold_id in gold_ids:
+            distances[gold_id] = max_error
+            gold_corner = gold_corners[int(gold_id)]
+            if int(gold_id) in detected:
+                corner = detected[int(gold_id)]
+                loc_dist = get_norm(gold_corner, corner, type_dist)
+                if loc_dist < accuracy:
+                    distances[gold_id] = loc_dist
+                    dist += loc_dist
+                    detected_count += 1
         return detected_count, total_count, dist
 
     def detect_and_check(self, synthetic_aruco, dict_res):
@@ -756,10 +774,14 @@ def main():
             return
     elif configuration == "show_distance":
         distances1 = read_distances(dataset_path+'/'+args.d1)
+        distances3 = distances1
         if args.d2 != "":
             distances2 = read_distances(dataset_path + '/' + args.d2)
-            distances1 = {k: distances1.get(k, 0) - distances2.get(k, 0) for k in set(distances1) & set(distances2)}
-        show_distances(distances1)
+            distances3 = {}
+            for key, value in distances1.items():
+                if key in distances2:
+                    distances3[key] = value - distances2[key]
+        show_distances(distances3)
         return
 
     print("distance threshold:", checker.accuracy, "\n")
