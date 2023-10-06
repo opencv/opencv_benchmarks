@@ -17,6 +17,7 @@ python objdetect_benchmark.py -p path
 """
 
 import argparse
+import sys
 from enum import Enum
 import numpy as np
 from numpy import linalg as LA
@@ -28,6 +29,7 @@ import cv2 as cv
 import pandas as pd
 import datetime
 import matplotlib.pyplot as plt
+from iteration_utilities import deepflatten
 
 # l_1 - https://en.wikipedia.org/wiki/Norm_(mathematics)
 # l_inf - Chebyshev norm https://en.wikipedia.org/wiki/Chebyshev_distance
@@ -50,6 +52,7 @@ def get_max_error(accuracy, type_dist):
     if type_dist is TypeNorm.intersection_over_union:
         return 1
     raise TypeError("this TypeNorm isn't supported")
+
 
 def get_synthetic_rt(yaw, pitch, distance):
     rvec = np.zeros((3, 1), np.float64)
@@ -336,24 +339,32 @@ class SyntheticAruco(SyntheticObject):
         self.image = cv.imread(path + "/" + filename + ".png", cv.IMREAD_GRAYSCALE)
 
 
-def show_distances(distances):
-    data_frame = pd.DataFrame(distances.values())
-    data_frame.hist(bins=50)
-    plt.title('')
-    plt.xlabel('error')
-    plt.ylabel('frequency')
-    plt.show()
-
-    plt.rcParams["figure.figsize"] = (20, 10)
-    plt.rcParams["figure.subplot.bottom"] = 0.4
-    plt.rcParams["figure.subplot.left"] = 0.03
+def set_plt():
+    plt.rcParams["figure.figsize"] = (20, 12)
+    plt.rcParams["figure.subplot.bottom"] = 0.3
+    plt.rcParams["figure.subplot.left"] = 0.05
     plt.rcParams["figure.subplot.right"] = 0.99
-    max_col = 80
-    tmp = [list(distances.keys()), list(distances.values())]
-    for i in range(0, len(tmp[0]), max_col):
-        data_frame = pd.DataFrame({"name": tmp[0][i:i + max_col], "distances": tmp[1][i:i + max_col]})
-        data_frame.plot.bar(x='name', y='distances')
+
+
+def show_statistics(distances):
+    for ojb_type, statistics in distances.items():
+        l1 = np.array(list(deepflatten(statistics[2])))
+        max_error = 10.
+        print("max detected error", max(l1[l1 < max_error]))
+        print("mean detected error", np.mean(l1[l1 < max_error]))
+        data_frame = pd.DataFrame(l1)
+        set_plt()
+        data_frame.hist(bins=500)
+        plt.title('')
+        plt.xlabel('error')
+        plt.ylabel('frequency')
         plt.show()
+        # max_col = 80
+        # tmp = [list(distances.keys()), list(distances.values())]
+        # for i in range(0, len(tmp[0]), max_col):
+        #     data_frame = pd.DataFrame({"name": tmp[0][i:i + max_col], "distances": tmp[1][i:i + max_col]})
+        #     data_frame.plot.bar(x='name', y='distances')
+        #     plt.show()
 
 
 def read_distances(filename):
@@ -370,6 +381,10 @@ class Checker:
         self.path = path
 
     @staticmethod
+    def get_distances_dict():
+        return {"empty": [[], []]}
+
+    @staticmethod
     def _formatting_dict(input_dict):
         return {}
 
@@ -384,7 +399,7 @@ class Checker:
         result.append(self._formatting_dict(total_dict))
         print(pd.DataFrame(result).to_string(index=False))
         with open(self.path + "/" + "distances_" +
-                  datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + '.json', 'w') as fp:
+                  datetime.datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p") + '.json', 'w') as fp:
             json.dump(distances, fp, cls=NumpyEncoder)
 
 
@@ -402,43 +417,40 @@ class ArucoChecker(Checker):
             fs_write.release()
 
     @staticmethod
+    def get_distances_dict():
+        return {"aruco": [[], []]}
+
+    @staticmethod
     def check_aruco(synthetic_aruco, marker_corners, marker_ids, accuracy, type_dist):
         gold = {}
         gold_corners, gold_ids = synthetic_aruco.aruco_corners.reshape(-1, 4, 2), \
             synthetic_aruco.aruco_ids
         for marker_id, marker in zip(gold_ids, gold_corners):
             gold[int(marker_id)] = marker
-        dist = 0.
-        detected_count = 0
-        total_count = len(gold_ids)
         detected = {}
-        distances = {}
         if marker_ids is not None and len(marker_ids) > 0:
             for marker_id, marker in zip(marker_ids, marker_corners):
                 detected[int(marker_id)] = marker.reshape(4, 2)
         max_error = get_max_error(accuracy, type_dist)
-        for gold_id in gold_ids:
-            distances[gold_id] = max_error
+        distances = np.full(len(gold_ids), max_error)
+        for i, gold_id in enumerate(gold_ids):
             gold_corner = gold_corners[int(gold_id)]
             if int(gold_id) in detected:
                 corner = detected[int(gold_id)]
-                loc_dist = get_norm(gold_corner, corner, type_dist)
-                if loc_dist < accuracy:
-                    distances[gold_id] = loc_dist
-                    dist += loc_dist
-                    detected_count += 1
-        return detected_count, total_count, dist
+                distances[i] = min(max_error, get_norm(gold_corner, corner, type_dist))
+        return distances
 
     def detect_and_check(self, synthetic_aruco, dict_res):
         aruco_detector = cv.aruco.ArucoDetector(synthetic_aruco.grid_board.getDictionary(), self.aruco_params)
         marker_corners, marker_ids, _ = aruco_detector.detectMarkers(synthetic_aruco.image)
-        ar_detected, ar_total, ar_dist = ArucoChecker.check_aruco(synthetic_aruco, marker_corners, marker_ids,
-                                                                  self.accuracy, self.type_dist)
-        update_dict(dict_res, "total detected aruco corners", ar_detected)
-        update_dict(dict_res, "total aruco corners", ar_total)
-        update_dict(dict_res, "total aruco distance", ar_dist)
-        average_distance = (ar_dist + abs(ar_total - ar_detected)*self.accuracy) / ar_total
-        return {"aruco": average_distance}
+        ar_dist = ArucoChecker.check_aruco(synthetic_aruco, marker_corners, marker_ids, self.accuracy, self.type_dist)
+        max_error = get_max_error(self.accuracy, self.type_dist)
+        ar_detected = ar_dist[ar_dist < max_error]
+        detected_count = len(ar_detected)
+        update_dict(dict_res, "total detected aruco corners", detected_count)
+        update_dict(dict_res, "total aruco corners", len(ar_dist))
+        update_dict(dict_res, "total aruco detected distance", ar_detected.sum())
+        return {"aruco": ar_dist}
 
     @staticmethod
     def _formatting_dict(input_dict):
@@ -446,8 +458,8 @@ class ArucoChecker(Checker):
                        "detected aruco corners":
                        input_dict["total detected aruco corners"] / max(1, input_dict["total aruco corners"]),
                        "total detected aruco corners": input_dict["total detected aruco corners"],
-                       "total aruco corners": input_dict["total aruco corners"], "average aruco error":
-                       input_dict["total aruco distance"] / max(1, input_dict["total detected aruco corners"])}
+                       "total aruco corners": input_dict["total aruco corners"], "average aruco detected error":
+                       input_dict["total aruco detected distance"] / max(1, input_dict["total detected aruco corners"])}
         return output_dict
 
 
@@ -710,7 +722,7 @@ def main():
     parser = argparse.ArgumentParser(description="augmentation benchmark", add_help=False)
     parser.add_argument("-H", "--help", help="show help", action="store_true", dest="show_help")
     parser.add_argument("--configuration", help="script launch configuration", default="generate_run", action="store",
-                        dest="configuration", choices=['generate_run', 'generate', 'run', 'show_distance'], type=str)
+                        dest="configuration", choices=['generate_run', 'generate', 'run', 'show'], type=str)
     parser.add_argument("-p", "--path", help="input/output dataset path", default="", action="store",
                         dest="dataset_path")
     parser.add_argument("-d1", help="d1", default="", action="store", dest="d1")
@@ -772,35 +784,45 @@ def main():
         generate_dataset(args, synthetic_object)
         if configuration == "generate":
             return
-    elif configuration == "show_distance":
+    elif configuration == "show":
         distances1 = read_distances(dataset_path+'/'+args.d1)
         distances3 = distances1
         if args.d2 != "":
             distances2 = read_distances(dataset_path + '/' + args.d2)
-            distances3 = {}
             for key, value in distances1.items():
                 if key in distances2:
-                    distances3[key] = value - distances2[key]
-        show_distances(distances3)
+                    for i, category in enumerate(value[2]):
+                        for j, image in enumerate(category):
+                            for k, corner in enumerate(image):
+                                distances3[key][2][i][j][k] = corner - distances2[key][2][i][j][k]
+        show_statistics(distances3)
         return
 
     print("distance threshold:", checker.accuracy, "\n")
 
     list_folders = next(os.walk(dataset_path))[1]
-    result = []
-    distances = {}
+    table_result = []
+    error_by_categories = {}
     for folder in list_folders:
         configs = glob.glob(dataset_path + '/' + folder + '/*.json')
         category_result = {"category": folder}
+        distances = checker.get_distances_dict()
         for config in configs:
             config_name = config.split('/')[-1].split('\\')[-1].split('.')[0]
             synthetic_object.read(dataset_path + '/' + folder, config_name)
-            # charuco_object.show()
+            # synthetic_object.show()
             distance = checker.detect_and_check(synthetic_object, category_result)
             for key, value in distance.items():
-                distances[key + "_" + config_name] = value
-        result.append(category_result)
-    checker.formatting_result(result, distances)
+                distances[key][0] += [config_name]
+                distances[key][1] += [value]
+        table_result.append(category_result)
+        for key, value in distances.items():
+            if key not in error_by_categories:
+                error_by_categories[key] = [[], [], []]
+            error_by_categories[key][0].append(folder)
+            error_by_categories[key][1].append(value[0])
+            error_by_categories[key][2].append(value[1])
+    checker.formatting_result(table_result, error_by_categories)
 
 
 if __name__ == '__main__':
