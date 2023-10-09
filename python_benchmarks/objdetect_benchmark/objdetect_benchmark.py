@@ -346,10 +346,10 @@ def set_plt():
     plt.rcParams["figure.subplot.right"] = 0.99
 
 
-def show_statistics(distances):
+def show_statistics(distances, accuracy):
     for ojb_type, statistics in distances.items():
         l1 = np.array(list(deepflatten(statistics[2])))
-        max_error = 10.
+        max_error = accuracy
         print("max detected error", max(l1[l1 < max_error]))
         print("mean detected error", np.mean(l1[l1 < max_error]))
         data_frame = pd.DataFrame(l1)
@@ -446,8 +446,7 @@ class ArucoChecker(Checker):
         ar_dist = ArucoChecker.check_aruco(synthetic_aruco, marker_corners, marker_ids, self.accuracy, self.type_dist)
         max_error = get_max_error(self.accuracy, self.type_dist)
         ar_detected = ar_dist[ar_dist < max_error]
-        detected_count = len(ar_detected)
-        update_dict(dict_res, "total detected aruco corners", detected_count)
+        update_dict(dict_res, "total detected aruco corners", len(ar_detected))
         update_dict(dict_res, "total aruco corners", len(ar_dist))
         update_dict(dict_res, "total aruco detected distance", ar_detected.sum())
         return {"aruco": ar_dist}
@@ -528,6 +527,10 @@ class SyntheticCharuco(SyntheticObject):
 
 
 class CharucoChecker(Checker):
+    @staticmethod
+    def get_distances_dict():
+        return {"aruco": [[], []], "chessboard": [[], []]}
+
     def _check_charuco(self, synthetic_charuco, charuco_corners, charuco_ids):
         gold = {}
         gold_corners = synthetic_charuco.chessboard_corners.reshape(-1, 2)
@@ -537,32 +540,32 @@ class CharucoChecker(Checker):
         if charuco_ids is not None and len(charuco_ids) > 0:
             for charuco_id, charuco_corner in zip(charuco_ids, charuco_corners):
                 detected[int(charuco_id)] = charuco_corner
-        dist = 0.
-        detected_count = 0
+        max_error = get_max_error(self.accuracy, self.type_dist)
         total_count = len(gold_corners)
-        for gold_id in range(total_count):
+        distances = np.full(total_count, max_error)
+        for i, gold_id in enumerate(range(total_count)):
             gold_corner = gold_corners[int(gold_id)]
             if int(gold_id) in detected:
                 corner = detected[int(gold_id)]
-                loc_dist = get_norm(gold_corner, corner, self.type_dist)
-                if loc_dist < self.accuracy:
-                    dist += loc_dist
-                    detected_count += 1
-        return detected_count, total_count, dist
+                distances[i] = min(max_error, get_norm(gold_corner, corner, self.type_dist))
+        return distances
 
     def detect_and_check(self, synthetic_charuco, dict_res):
         charuco_detector = cv.aruco.CharucoDetector(synthetic_charuco.charuco_board)
         charuco_corners, charuco_ids, marker_corners, marker_ids = charuco_detector.detectBoard(synthetic_charuco.image)
-        ar_detected, ar_total, ar_dist = ArucoChecker.check_aruco(synthetic_charuco, marker_corners, marker_ids,
-                                                                  self.accuracy, self.type_dist)
-        update_dict(dict_res, "total detected aruco corners", ar_detected)
-        update_dict(dict_res, "total aruco corners", ar_total)
-        update_dict(dict_res, "total aruco distance", ar_dist)
+        ar_dist = ArucoChecker.check_aruco(synthetic_charuco, marker_corners, marker_ids, self.accuracy, self.type_dist)
+        max_error = get_max_error(self.accuracy, self.type_dist)
+        ar_detected = ar_dist[ar_dist < max_error]
+        update_dict(dict_res, "total detected aruco corners", len(ar_detected))
+        update_dict(dict_res, "total aruco corners", len(ar_dist))
+        update_dict(dict_res, "total aruco detected distance", ar_detected.sum())
 
-        ch_detected, ch_total, ch_dist = self._check_charuco(synthetic_charuco, charuco_corners, charuco_ids)
-        update_dict(dict_res, "total detected chessboard corners", ch_detected)
-        update_dict(dict_res, "total chessboard corners", ch_total)
-        update_dict(dict_res, "total distance", ch_dist)
+        ch_dist = self._check_charuco(synthetic_charuco, charuco_corners, charuco_ids)
+        ch_detected = ch_dist[ch_dist < max_error]
+        update_dict(dict_res, "total detected chessboard corners", len(ch_detected))
+        update_dict(dict_res, "total chessboard corners", len(ch_dist))
+        update_dict(dict_res, "total distance", ch_detected.sum())
+        return {"aruco": ar_dist, "chessboard": ch_dist}
 
     @staticmethod
     def _formatting_dict(input_dict):
@@ -570,8 +573,8 @@ class CharucoChecker(Checker):
                        "detected aruco corners":
                        input_dict["total detected aruco corners"] / max(1, input_dict["total aruco corners"]),
                        "total detected aruco corners": input_dict["total detected aruco corners"],
-                       "total aruco corners": input_dict["total aruco corners"], "average aruco error":
-                       input_dict["total aruco distance"] / max(1, input_dict["total detected aruco corners"]),
+                       "total aruco corners": input_dict["total aruco corners"], "average aruco detected error":
+                       input_dict["total aruco detected distance"] / max(1, input_dict["total detected aruco corners"]),
 
                        "detected chessboard corners":
                        input_dict["total detected chessboard corners"] / max(1, input_dict["total chessboard corners"]),
@@ -795,7 +798,7 @@ def main():
                         for j, image in enumerate(category):
                             for k, corner in enumerate(image):
                                 distances3[key][2][i][j][k] = corner - distances2[key][2][i][j][k]
-        show_statistics(distances3)
+        show_statistics(distances3, accuracy)
         return
 
     print("distance threshold:", checker.accuracy, "\n")
