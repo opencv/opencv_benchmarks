@@ -346,25 +346,35 @@ def set_plt():
     plt.rcParams["figure.subplot.right"] = 0.99
 
 
+def show_statistic(obj_type, category, statistics, accuracy):
+    l1 = np.array(list(deepflatten(statistics)))
+    max_error = accuracy
+    print(obj_type + ' ' + category + " max detected error", max(l1[l1 < max_error]))
+    print(obj_type + ' ' + category + " mean detected error", np.mean(l1[l1 < max_error]))
+    print()
+    data_frame = pd.DataFrame(l1)
+    data_frame.hist(bins=500)
+    plt.title(category + ' ' + obj_type)
+    plt.xlabel('error')
+    plt.xticks(np.arange(0., float(max_error)+.25, .25))
+    plt.ylabel('frequency')
+    plt.show()
+    #plt.savefig(category + '_' + obj_type + '.jpg')
+
+
 def show_statistics(distances, accuracy):
-    for ojb_type, statistics in distances.items():
+    set_plt()
+    for obj_type, statistics in distances.items():
         l1 = np.array(list(deepflatten(statistics[2])))
-        max_error = accuracy
-        print("max detected error", max(l1[l1 < max_error]))
-        print("mean detected error", np.mean(l1[l1 < max_error]))
-        data_frame = pd.DataFrame(l1)
-        set_plt()
-        data_frame.hist(bins=500)
-        plt.title('')
-        plt.xlabel('error')
-        plt.ylabel('frequency')
-        plt.show()
-        # max_col = 80
-        # tmp = [list(distances.keys()), list(distances.values())]
-        # for i in range(0, len(tmp[0]), max_col):
-        #     data_frame = pd.DataFrame({"name": tmp[0][i:i + max_col], "distances": tmp[1][i:i + max_col]})
-        #     data_frame.plot.bar(x='name', y='distances')
-        #     plt.show()
+        show_statistic(obj_type, 'all', statistics[2], accuracy)
+        for category, image_names, category_statistics in zip(statistics[0], statistics[1], statistics[2]):
+            show_statistic(obj_type, category, category_statistics, accuracy)
+            # for image_name, image_statistics in zip(image_names, category_statistics):
+            #     data_frame = pd.DataFrame({"error": image_statistics})
+            #     data_frame.plot.bar(y='error')
+            #     plt.xlabel('id')
+            #     plt.ylabel('error')
+            #     plt.show()
 
 
 def read_distances(filename):
