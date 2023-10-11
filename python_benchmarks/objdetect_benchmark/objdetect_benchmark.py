@@ -17,7 +17,6 @@ python objdetect_benchmark.py -p path
 """
 
 import argparse
-import sys
 from enum import Enum
 import numpy as np
 from numpy import linalg as LA
@@ -340,13 +339,13 @@ class SyntheticAruco(SyntheticObject):
 
 
 def set_plt():
-    plt.rcParams["figure.figsize"] = (20, 12)
+    plt.rcParams["figure.figsize"] = (15, 9)
     plt.rcParams["figure.subplot.bottom"] = 0.3
     plt.rcParams["figure.subplot.left"] = 0.05
     plt.rcParams["figure.subplot.right"] = 0.99
 
 
-def show_statistic(obj_type, category, statistics, accuracy):
+def show_statistic(obj_type, category, statistics, accuracy, path):
     l1 = np.array(list(deepflatten(statistics)))
     max_error = accuracy
     print(obj_type + ' ' + category + " max detected error", max(l1[l1 < max_error]))
@@ -358,23 +357,33 @@ def show_statistic(obj_type, category, statistics, accuracy):
     plt.xlabel('error')
     plt.xticks(np.arange(0., float(max_error)+.25, .25))
     plt.ylabel('frequency')
-    plt.show()
-    #plt.savefig(category + '_' + obj_type + '.jpg')
+    # plt.show()
+    plt.savefig(path + '/' + category + '_' + obj_type + '.jpg')
+    plt.close()
 
 
-def show_statistics(distances, accuracy):
+def get_time():
+    return datetime.datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
+
+
+def show_statistics(distances, accuracy, dataset_path):
+    output_dict = dataset_path + '/' + get_time()
+    os.mkdir(output_dict)
     set_plt()
     for obj_type, statistics in distances.items():
-        l1 = np.array(list(deepflatten(statistics[2])))
-        show_statistic(obj_type, 'all', statistics[2], accuracy)
+        # l1 = np.array(list(deepflatten(statistics[2])))
+        show_statistic(obj_type, 'all', statistics[2], accuracy, output_dict)
         for category, image_names, category_statistics in zip(statistics[0], statistics[1], statistics[2]):
-            show_statistic(obj_type, category, category_statistics, accuracy)
-            # for image_name, image_statistics in zip(image_names, category_statistics):
-            #     data_frame = pd.DataFrame({"error": image_statistics})
-            #     data_frame.plot.bar(y='error')
-            #     plt.xlabel('id')
-            #     plt.ylabel('error')
-            #     plt.show()
+            show_statistic(obj_type, category, category_statistics, accuracy, output_dict)
+            if not os.path.exists(output_dict + '/' + category):
+                os.mkdir(output_dict + '/' + category)
+            for image_name, image_statistics in zip(image_names, category_statistics):
+                data_frame = pd.DataFrame({"error": image_statistics})
+                data_frame.plot.bar(y='error')
+                plt.xlabel('id')
+                plt.ylabel('error')
+                plt.savefig(output_dict + '/' + category + '/' + obj_type + '_' + image_name + '.jpg')
+                plt.close()
 
 
 def read_distances(filename):
@@ -408,8 +417,7 @@ class Checker:
 
         result.append(self._formatting_dict(total_dict))
         print(pd.DataFrame(result).to_string(index=False))
-        with open(self.path + "/" + "distances_" +
-                  datetime.datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p") + '.json', 'w') as fp:
+        with open(self.path + "/" + "distances_" + get_time() + '.json', 'w') as fp:
             json.dump(distances, fp, cls=NumpyEncoder)
 
 
@@ -780,6 +788,8 @@ def main():
         return
 
     dataset_path = args.dataset_path
+    if not os.path.exists(dataset_path):
+        os.mkdir(dataset_path)
     accuracy = args.accuracy
     metric = TypeNorm.l_inf
     if args.metric == "l1":
@@ -824,7 +834,7 @@ def main():
                         for j, image in enumerate(category):
                             for k, corner in enumerate(image):
                                 distances3[key][2][i][j][k] = corner - distances2[key][2][i][j][k]
-        show_statistics(distances3, accuracy)
+        show_statistics(distances3, accuracy, dataset_path)
         return
 
     print("distance threshold:", checker.accuracy, "\n")
@@ -833,6 +843,8 @@ def main():
     table_result = []
     error_by_categories = {}
     for folder in list_folders:
+        if folder[0].isdigit():
+            continue
         configs = glob.glob(dataset_path + '/' + folder + '/*.json')
         category_result = {"category": folder}
         distances = checker.get_distances_dict()
