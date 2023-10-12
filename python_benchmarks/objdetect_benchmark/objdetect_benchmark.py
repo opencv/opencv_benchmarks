@@ -339,6 +339,8 @@ class SyntheticAruco(SyntheticObject):
 
 
 def set_plt():
+    # Turn interactive plotting off
+    plt.ioff()
     plt.rcParams["figure.figsize"] = (15, 9)
     plt.rcParams["figure.subplot.bottom"] = 0.3
     plt.rcParams["figure.subplot.left"] = 0.05
@@ -346,20 +348,21 @@ def set_plt():
 
 
 def show_statistic(obj_type, category, statistics, accuracy, path):
-    l1 = np.array(list(deepflatten(statistics)))
-    max_error = accuracy
-    print(obj_type + ' ' + category + " max detected error", max(l1[l1 < max_error]))
-    print(obj_type + ' ' + category + " mean detected error", np.mean(l1[l1 < max_error]))
-    print()
-    data_frame = pd.DataFrame(l1)
+    objs = np.array(list(deepflatten(statistics)))
+    detected = objs[objs < accuracy]
+    frame = {"category": category, "detected " + obj_type: len(detected)/len(objs),
+             "total detected " + obj_type: len(detected), "total " + obj_type: len(detected),
+             "average error " + obj_type: np.mean(detected)}
+    data_frame = pd.DataFrame(objs)
     data_frame.hist(bins=500)
     plt.title(category + ' ' + obj_type)
     plt.xlabel('error')
-    plt.xticks(np.arange(0., float(max_error)+.25, .25))
+    plt.xticks(np.arange(0., float(accuracy)+.25, .25))
     plt.ylabel('frequency')
     # plt.show()
     plt.savefig(path + '/' + category + '_' + obj_type + '.jpg')
     plt.close()
+    return frame
 
 
 def get_time():
@@ -369,12 +372,14 @@ def get_time():
 def show_statistics(distances, accuracy, dataset_path):
     output_dict = dataset_path + '/' + get_time()
     os.mkdir(output_dict)
+    draw_all = False
+    result = []
     set_plt()
     for obj_type, statistics in distances.items():
-        # l1 = np.array(list(deepflatten(statistics[2])))
-        show_statistic(obj_type, 'all', statistics[2], accuracy, output_dict)
         for category, image_names, category_statistics in zip(statistics[0], statistics[1], statistics[2]):
-            show_statistic(obj_type, category, category_statistics, accuracy, output_dict)
+            result.append(show_statistic(obj_type, category, category_statistics, accuracy, output_dict))
+            if not draw_all:
+                continue
             if not os.path.exists(output_dict + '/' + category):
                 os.mkdir(output_dict + '/' + category)
             for image_name, image_statistics in zip(image_names, category_statistics):
@@ -384,6 +389,10 @@ def show_statistics(distances, accuracy, dataset_path):
                 plt.ylabel('error')
                 plt.savefig(output_dict + '/' + category + '/' + obj_type + '_' + image_name + '.jpg')
                 plt.close()
+        result.append(show_statistic(obj_type, 'all', statistics[2], accuracy, output_dict))
+    data_frame = pd.DataFrame(result)
+    data_frame = data_frame.groupby('category', as_index=False, sort=False).last()
+    print(data_frame.to_string(index=False))
 
 
 def read_distances(filename):
