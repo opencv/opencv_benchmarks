@@ -347,10 +347,10 @@ def set_plt():
     plt.rcParams["figure.subplot.right"] = 0.99
 
 
-def show_statistic(obj_type, category, statistics, accuracy, path):
+def print_category_frame(obj_type, category, statistics, accuracy, path):
     objs = np.array(list(deepflatten(statistics)))
     detected = objs[objs < accuracy]
-    frame = {"category": category, "detected " + obj_type: len(detected)/len(objs),
+    frame = {"category": category, "detected " + obj_type: len(detected)/max(1, len(objs)),
              "total detected " + obj_type: len(detected), "total " + obj_type: len(detected),
              "average error " + obj_type: np.mean(detected)}
     data_frame = pd.DataFrame(objs)
@@ -369,16 +369,18 @@ def get_time():
     return datetime.datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
 
 
-def print_statistics(distances, accuracy, dataset_path):
-    output_dict = dataset_path + '/' + get_time()
+def print_statistics(distances, accuracy, output_path, per_image_statistic):
+    filename = get_time()
+    with open(output_path + "/" + filename + '.json', 'w') as fp:
+        json.dump(distances, fp, cls=NumpyEncoder)
+    output_dict = output_path + '/' + filename
     os.mkdir(output_dict)
-    draw_all = False
     result = []
     set_plt()
     for obj_type, statistics in distances.items():
         for category, image_names, category_statistics in zip(statistics[0], statistics[1], statistics[2]):
-            result.append(show_statistic(obj_type, category, category_statistics, accuracy, output_dict))
-            if not draw_all:
+            result.append(print_category_frame(obj_type, category, category_statistics, accuracy, output_dict))
+            if not per_image_statistic:
                 continue
             if not os.path.exists(output_dict + '/' + category):
                 os.mkdir(output_dict + '/' + category)
@@ -389,7 +391,7 @@ def print_statistics(distances, accuracy, dataset_path):
                 plt.ylabel('error')
                 plt.savefig(output_dict + '/' + category + '/' + obj_type + '_' + image_name + '.jpg')
                 plt.close()
-        result.append(show_statistic(obj_type, 'all', statistics[2], accuracy, output_dict))
+        result.append(print_category_frame(obj_type, 'all', statistics[2], accuracy, output_dict))
     data_frame = pd.DataFrame(result)
     data_frame = data_frame.groupby('category', as_index=False, sort=False).last()
     print(data_frame.to_string(index=False))
@@ -409,18 +411,18 @@ class Checker:
         self.path = path
 
     @staticmethod
-    def get_distances_dict():
-        return {"empty": [[], []]}
+    def get_obj_names():
+        return ["empty"]
 
 
 class ArucoChecker(Checker):
-    def __init__(self, accuracy, type_dist, path="", read_params=True):
+    def __init__(self, accuracy, type_dist, path, read_params=True):
         super().__init__(accuracy, type_dist, path)
         self.aruco_params = cv.aruco.DetectorParameters()
         ArucoChecker.update_aruco_params(self.aruco_params, path, read_params)
 
     @staticmethod
-    def update_aruco_params(aruco_params, path="", read_params=True):
+    def update_aruco_params(aruco_params, path, read_params):
         if read_params and os.path.isfile(path+"/aruco_params.yml"):
             fs_read = cv.FileStorage(path+"/aruco_params.yml", cv.FileStorage_READ)
             aruco_params.readDetectorParameters(fs_read.root())
@@ -431,8 +433,8 @@ class ArucoChecker(Checker):
             fs_write.release()
 
     @staticmethod
-    def get_distances_dict():
-        return {"aruco": [[], []]}
+    def get_obj_names():
+        return ["aruco"]
 
     @staticmethod
     def check_aruco(synthetic_aruco, marker_corners, marker_ids, accuracy, type_dist):
@@ -458,7 +460,7 @@ class ArucoChecker(Checker):
         aruco_detector = cv.aruco.ArucoDetector(synthetic_aruco.grid_board.getDictionary(), self.aruco_params)
         marker_corners, marker_ids, _ = aruco_detector.detectMarkers(synthetic_aruco.image)
         ar_dist = ArucoChecker.check_aruco(synthetic_aruco, marker_corners, marker_ids, self.accuracy, self.type_dist)
-        return {"aruco": ar_dist}
+        return {self.get_obj_names()[0]: ar_dist}
 
 
 class SyntheticCharuco(SyntheticObject):
@@ -532,8 +534,8 @@ class CharucoChecker(Checker):
         ArucoChecker.update_aruco_params(self.aruco_params, path, read_params)
 
     @staticmethod
-    def get_distances_dict():
-        return {"aruco": [[], []], "chessboard": [[], []]}
+    def get_obj_names():
+        return ["aruco", "chessboard"]
 
     def _check_charuco(self, synthetic_charuco, charuco_corners, charuco_ids):
         gold = {}
@@ -561,7 +563,7 @@ class CharucoChecker(Checker):
         ar_dist = ArucoChecker.check_aruco(synthetic_charuco, marker_corners, marker_ids, self.accuracy, self.type_dist)
 
         ch_dist = self._check_charuco(synthetic_charuco, charuco_corners, charuco_ids)
-        return {"aruco": ar_dist, "chessboard": ch_dist}
+        return {self.get_obj_names()[0]: ar_dist, self.get_obj_names()[1]: ch_dist}
 
 
 class SyntheticChessboard(SyntheticObject):
@@ -616,8 +618,8 @@ class SyntheticChessboard(SyntheticObject):
 
 class ChessboardChecker(Checker):
     @staticmethod
-    def get_distances_dict():
-        return {"chessboard": [[], []]}
+    def get_obj_names():
+        return ["chessboard"]
 
     def __check_chessboard(self, synthetic_chessboard, corners):
         gold = {}
@@ -642,7 +644,7 @@ class ChessboardChecker(Checker):
         if ret is True:
             corners = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
         ch_dist = self.__check_chessboard(synthetic_chessboard, corners)
-        return {"chessboard": ch_dist}
+        return {self.get_obj_names()[0]: ch_dist}
 
 
 def generate_dataset(args, synthetic_object, background_color=0):
@@ -689,10 +691,12 @@ def main():
     parser.add_argument("-H", "--help", help="show help", action="store_true", dest="show_help")
     parser.add_argument("--configuration", help="script launch configuration", default="generate_run", action="store",
                         dest="configuration", choices=['generate_run', 'generate', 'run', 'show'], type=str)
-    parser.add_argument("-p", "--path", help="input/output dataset path", default="", action="store",
+    parser.add_argument("-p", "--path", help="input/output dataset path", default=".", action="store",
                         dest="dataset_path")
     parser.add_argument("-d1", help="d1", default="", action="store", dest="d1")
     parser.add_argument("-d2", help="d2", default="", action="store", dest="d2")
+    parser.add_argument("--per_image_statistic", help="print the per image statistic", default=False, action="store",
+                        dest="per_image_statistic", type=bool)
     parser.add_argument("-a", "--accuracy", help="input accuracy", default="10", action="store", dest="accuracy",
                         type=float)
     parser.add_argument("--marker_length_rate", help="square marker length rate for charuco", default=".5",
@@ -755,7 +759,7 @@ def main():
     elif configuration == "show":
         distances1 = read_distances(dataset_path+'/'+args.d1)
         distances3 = distances1
-        if args.d2 != "":
+        if args.d2 != '':
             distances2 = read_distances(dataset_path + '/' + args.d2)
             for key, value in distances1.items():
                 if key in distances2:
@@ -763,7 +767,7 @@ def main():
                         for j, image in enumerate(category):
                             for k, corner in enumerate(image):
                                 distances3[key][2][i][j][k] = corner - distances2[key][2][i][j][k]
-        print_statistics(distances3, accuracy, dataset_path)
+        print_statistics(distances3, accuracy, dataset_path, args.per_image_statistic)
         return
 
     print("distance threshold:", checker.accuracy, "\n")
@@ -774,7 +778,9 @@ def main():
         if folder[0].isdigit():
             continue
         configs = glob.glob(dataset_path + '/' + folder + '/*.json')
-        distances = checker.get_distances_dict()
+        distances = {}
+        for name in checker.get_obj_names():
+            distances[name] = [[], []]
         for config in configs:
             config_name = config.split('/')[-1].split('\\')[-1].split('.')[0]
             synthetic_object.read(dataset_path + '/' + folder, config_name)
@@ -789,7 +795,7 @@ def main():
             error_by_categories[key][0].append(folder)
             error_by_categories[key][1].append(value[0])
             error_by_categories[key][2].append(value[1])
-    print_statistics(error_by_categories, accuracy, dataset_path)
+    print_statistics(error_by_categories, accuracy, dataset_path, args.per_image_statistic)
 
 
 if __name__ == '__main__':
