@@ -347,12 +347,12 @@ def set_plt():
     plt.rcParams["figure.subplot.right"] = 0.99
 
 
-def print_category_frame(obj_type, category, statistics, accuracy, path):
+def get_and_print_category_statistic(obj_type, category, statistics, accuracy, path):
     objs = np.array(list(deepflatten(statistics)))
     detected = objs[objs < accuracy]
-    frame = {"category": category, "detected " + obj_type: len(detected)/max(1, len(objs)),
-             "total detected " + obj_type: len(detected), "total " + obj_type: len(objs),
-             "average error " + obj_type: np.mean(detected)}
+    category_statistic = {"category": category, "detected " + obj_type: len(detected)/max(1, len(objs)),
+                          "total detected " + obj_type: len(detected), "total " + obj_type: len(objs),
+                          "average error " + obj_type: np.mean(detected)}
     data_frame = pd.DataFrame(objs)
     data_frame.hist(bins=500)
     plt.title(category + ' ' + obj_type)
@@ -362,7 +362,7 @@ def print_category_frame(obj_type, category, statistics, accuracy, path):
     # plt.show()
     plt.savefig(path + '/' + category + '_' + obj_type + '.jpg')
     plt.close()
-    return frame
+    return category_statistic
 
 
 def get_time():
@@ -379,7 +379,7 @@ def print_statistics(distances, accuracy, output_path, per_image_statistic):
     set_plt()
     for obj_type, statistics in distances.items():
         for category, image_names, category_statistics in zip(statistics[0], statistics[1], statistics[2]):
-            result.append(print_category_frame(obj_type, category, category_statistics, accuracy, output_dict))
+            result.append(get_and_print_category_statistic(obj_type, category, category_statistics, accuracy, output_dict))
             if not per_image_statistic:
                 continue
             if not os.path.exists(output_dict + '/' + category):
@@ -391,9 +391,8 @@ def print_statistics(distances, accuracy, output_path, per_image_statistic):
                 plt.ylabel('error')
                 plt.savefig(output_dict + '/' + category + '/' + obj_type + '_' + image_name + '.jpg')
                 plt.close()
-        result.append(print_category_frame(obj_type, 'all', statistics[2], accuracy, output_dict))
-    data_frame = pd.DataFrame(result)
-    data_frame = data_frame.groupby('category', as_index=False, sort=False).last()
+        result.append(get_and_print_category_statistic(obj_type, 'all', statistics[2], accuracy, output_dict))
+    data_frame = pd.DataFrame(result).groupby('category', as_index=False, sort=False).last()
     print(data_frame.to_string(index=False))
 
 
