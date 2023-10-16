@@ -121,9 +121,8 @@ class PerspectiveTransform(TransformObject):
 
     def transform_image(self, image):
         border_value = 0
-        aux = cv.warpPerspective(image, self.transformation, (image.shape[1], image.shape[0]), None, cv.INTER_NEAREST,
-                                 cv.BORDER_CONSTANT,
-                                 border_value)
+        aux = cv.warpPerspective(image, self.transformation, (image.shape[1], image.shape[0]), None,
+                                 cv.INTER_LINEAR, cv.BORDER_CONSTANT, border_value)
         assert (image.shape == aux.shape)
         return aux
 
@@ -292,7 +291,8 @@ class SyntheticAruco(SyntheticObject):
         self.grid_board = cv.aruco.GridBoard(board_size, 1., marker_separation, self.dict)
         board_image_size, pix = self.__get_size(cell_img_size)
         self.image = self.grid_board.generateImage(board_image_size)
-        self.aruco_corners = (np.array(self.grid_board.getObjPoints(), dtype=np.float32) * pix).reshape(-1, 3)[:, :-1]
+        self.aruco_corners = np.round((np.array(self.grid_board.getObjPoints(),
+                                                dtype=np.float32) * pix).reshape(-1, 3)[:, :-1])
         self.aruco_ids = np.array(self.grid_board.getIds())
         self.fields = {"board_size": None, "marker_separation": None, "dict_id": None, "aruco_corners": None,
                        "aruco_ids": None}
@@ -471,8 +471,8 @@ class SyntheticCharuco(SyntheticObject):
         self.charuco_board = cv.aruco.CharucoBoard(board_size, 1., 1. * square_marker_length_rate, self.dict)
         board_image_size = [board_size[0] * cell_img_size, board_size[1] * cell_img_size]
         self.image = self.charuco_board.generateImage(board_image_size)
-        self.aruco_corners = (np.array(self.charuco_board.getObjPoints(), dtype=np.float32)
-                              * cell_img_size).reshape(-1, 3)[:, :-1]
+        self.aruco_corners = np.round((np.array(self.charuco_board.getObjPoints(), dtype=np.float32)
+                                       * cell_img_size).reshape(-1, 3)[:, :-1])
         self.aruco_ids = np.array(self.charuco_board.getIds())
         self.chessboard_corners = (np.array(self.charuco_board.getChessboardCorners(), dtype=np.float32)
                                    * cell_img_size)[:, :-1]
