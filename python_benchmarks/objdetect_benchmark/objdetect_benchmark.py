@@ -351,7 +351,7 @@ def print_category_frame(obj_type, category, statistics, accuracy, path):
     objs = np.array(list(deepflatten(statistics)))
     detected = objs[objs < accuracy]
     frame = {"category": category, "detected " + obj_type: len(detected)/max(1, len(objs)),
-             "total detected " + obj_type: len(detected), "total " + obj_type: len(detected),
+             "total detected " + obj_type: len(detected), "total " + obj_type: len(objs),
              "average error " + obj_type: np.mean(detected)}
     data_frame = pd.DataFrame(objs)
     data_frame.hist(bins=500)
@@ -677,7 +677,7 @@ def generate_dataset(args, synthetic_object, background_color=0):
             synthetic_object.transform_object(rotate_t)
             for transform in transforms:
                 synthetic_object.transform_object(transform)
-            folder = '_'.join(synthetic_object.history)
+            folder = '_' + '_'.join(synthetic_object.history)
             dictionary[folder] = dictionary.get(folder, -1) + 1
             if not os.path.exists(output + "/" + folder):
                 os.mkdir(output + "/" + folder)
@@ -775,7 +775,7 @@ def main():
     list_folders = next(os.walk(dataset_path))[1]
     error_by_categories = {}
     for folder in list_folders:
-        if folder[0].isdigit():
+        if folder[0] != '_':
             continue
         configs = glob.glob(dataset_path + '/' + folder + '/*.json')
         distances = {}
