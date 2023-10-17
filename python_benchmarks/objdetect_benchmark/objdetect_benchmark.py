@@ -122,7 +122,7 @@ class PerspectiveTransform(TransformObject):
     def transform_image(self, image):
         border_value = 0
         aux = cv.warpPerspective(image, self.transformation, (image.shape[1], image.shape[0]), None,
-                                 cv.INTER_LINEAR, cv.BORDER_CONSTANT, border_value)
+                                 cv.INTER_CUBIC, cv.BORDER_CONSTANT, border_value)
         assert (image.shape == aux.shape)
         return aux
 
@@ -143,7 +143,7 @@ class RotateTransform(TransformObject):
         self.rot_mat = cv.getRotationMatrix2D(
             [self.rel_center[0] * image.shape[1], self.rel_center[1] * image.shape[0]],
             self.angle, 1.0)
-        warp_rotate_dst = cv.warpAffine(image, self.rot_mat, (image.shape[1], image.shape[0]))
+        warp_rotate_dst = cv.warpAffine(image, self.rot_mat, (image.shape[1], image.shape[0]), flags=cv.INTER_CUBIC)
         return warp_rotate_dst
 
     def transform_points(self, points):
@@ -694,8 +694,7 @@ def main():
                         dest="dataset_path")
     parser.add_argument("-d1", help="d1", default="", action="store", dest="d1")
     parser.add_argument("-d2", help="d2", default="", action="store", dest="d2")
-    parser.add_argument("--per_image_statistic", help="print the per image statistic", default=False, action="store",
-                        dest="per_image_statistic", type=bool)
+    parser.add_argument("--per_image_statistic", help="print the per image statistic", action="store_true")
     parser.add_argument("-a", "--accuracy", help="input accuracy", default="10", action="store", dest="accuracy",
                         type=float)
     parser.add_argument("--marker_length_rate", help="square marker length rate for charuco", default=".5",
