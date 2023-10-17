@@ -392,8 +392,11 @@ def print_statistics(distances, accuracy, output_path, per_image_statistic):
                 plt.savefig(output_dict + '/' + category + '/' + obj_type + '_' + image_name + '.jpg')
                 plt.close()
         result.append(get_and_print_category_statistic(obj_type, 'all', statistics[2], accuracy, output_dict))
-    data_frame = pd.DataFrame(result).groupby('category', as_index=False, sort=False).last()
-    print(data_frame.to_string(index=False))
+    if len(result) > 0:
+        data_frame = pd.DataFrame(result).groupby('category', as_index=False, sort=False).last()
+        print(data_frame.to_string(index=False))
+    else:
+        print("no data found, use --configuration=generate_run or --configuration=generate")
 
 
 def read_distances(filename):
