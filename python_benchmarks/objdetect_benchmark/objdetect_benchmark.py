@@ -370,7 +370,7 @@ def get_time():
 
 
 def print_statistics(distances, accuracy, output_path, per_image_statistic):
-    filename = get_time()
+    filename = "report_" + get_time()
     with open(output_path + "/" + filename + '.json', 'w') as fp:
         json.dump(distances, fp, cls=NumpyEncoder)
     output_dict = output_path + '/' + filename
@@ -651,8 +651,9 @@ class ChessboardChecker(Checker):
 
 def generate_dataset(args, synthetic_object, background_color=0):
     output = args.dataset_path
-    background = BackGroundObject(num_rows=int(synthetic_object.image.shape[0] * 2.),
-                                  num_cols=int(synthetic_object.image.shape[1] * 2.), color=background_color)
+    background = BackGroundObject(num_rows=synthetic_object.image.shape[0] * 2,
+                                  num_cols=synthetic_object.image.shape[1] * 2,
+                                  color=background_color)
     rel_center_x, rel_center_y = args.rel_center_x, args.rel_center_y
     pasting_object = PastingTransform(background_object=background, rel_center=(rel_center_y, rel_center_x))
     synthetic_object.transform_object(pasting_object)

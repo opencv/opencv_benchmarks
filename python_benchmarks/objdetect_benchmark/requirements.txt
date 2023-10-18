@@ -1,4 +1,4 @@
-opencv-python
+# opencv-python install with pip or build manually
 numpy
 pandas
 matplotlib
