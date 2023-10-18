@@ -25,6 +25,10 @@ import itertools
 import glob
 import os
 import cv2 as cv
+import pandas as pd
+import datetime
+import matplotlib.pyplot as plt
+from iteration_utilities import deepflatten
 
 # l_1 - https://en.wikipedia.org/wiki/Norm_(mathematics)
 # l_inf - Chebyshev norm https://en.wikipedia.org/wiki/Chebyshev_distance
@@ -38,6 +42,14 @@ def get_norm(gold_corners, corners, type_dist):
         return LA.norm((gold_corners - corners).flatten(), 2)
     if type_dist is TypeNorm.l_inf:
         return LA.norm((gold_corners - corners).flatten(), np.inf)
+    raise TypeError("this TypeNorm isn't supported")
+
+
+def get_max_error(accuracy, type_dist):
+    if type_dist is TypeNorm.l1 or TypeNorm.l2 or TypeNorm.l3 or TypeNorm.l_inf:
+        return accuracy
+    if type_dist is TypeNorm.intersection_over_union:
+        return 1
     raise TypeError("this TypeNorm isn't supported")
 
 
@@ -109,9 +121,8 @@ class PerspectiveTransform(TransformObject):
 
     def transform_image(self, image):
         border_value = 0
-        aux = cv.warpPerspective(image, self.transformation, (image.shape[1], image.shape[0]), None, cv.INTER_NEAREST,
-                                 cv.BORDER_CONSTANT,
-                                 border_value)
+        aux = cv.warpPerspective(image, self.transformation, (image.shape[1], image.shape[0]), None,
+                                 cv.INTER_CUBIC, cv.BORDER_CONSTANT, border_value)
         assert (image.shape == aux.shape)
         return aux
 
@@ -126,13 +137,13 @@ class RotateTransform(TransformObject):
         self.angle = angle
         self.rel_center = rel_center
         self.rot_mat = None
-        self.name = "rotate"
+        self.name = ""
 
     def transform_image(self, image):
         self.rot_mat = cv.getRotationMatrix2D(
             [self.rel_center[0] * image.shape[1], self.rel_center[1] * image.shape[0]],
             self.angle, 1.0)
-        warp_rotate_dst = cv.warpAffine(image, self.rot_mat, (image.shape[1], image.shape[0]))
+        warp_rotate_dst = cv.warpAffine(image, self.rot_mat, (image.shape[1], image.shape[0]), flags=cv.INTER_CUBIC)
         return warp_rotate_dst
 
     def transform_points(self, points):
@@ -192,7 +203,7 @@ class PastingTransform(TransformObject):
         self.col_offset = int(self.background_image.shape[1] * self.rel_center[1] - image.shape[1] / 2)
         background_image = np.copy(self.background_image)
         background_image[self.row_offset:self.row_offset + image.shape[0],
-        self.col_offset:self.col_offset + image.shape[1]] = image
+                         self.col_offset:self.col_offset + image.shape[1]] = image
         image = background_image
         return image
 
@@ -255,15 +266,11 @@ class SyntheticObject:
 
 class BackGroundObject(SyntheticObject):
     def __init__(self, *, num_rows, num_cols, color=0):
-        self.image = np.zeros((num_rows, num_cols), dtype=np.uint8)+color
+        self.image = np.zeros((num_rows, num_cols), dtype=np.uint8) + color
 
     def show(self, wait_key=0):
         cv.imshow("BackGroundObject", self.image)
         cv.waitKey(wait_key)
-
-
-def checkerboard(shape):
-    return ((np.indices(shape).sum(axis=0) % 2) * 255).astype(dtype=np.uint8)
 
 
 class SyntheticAruco(SyntheticObject):
@@ -271,8 +278,8 @@ class SyntheticAruco(SyntheticObject):
         board_image_size = [0, 0]
         pix = cell_img_size / (1. + self.marker_separation)
         for i in range(0, 2):
-            board_image_size[i] = max(0, cell_img_size*(self.board_size[i]-2))
-            board_image_size[i] += pix*(1 + self.marker_separation/2)*min(2, self.board_size[i])
+            board_image_size[i] = max(0, cell_img_size * (self.board_size[i] - 2))
+            board_image_size[i] += pix * (1 + self.marker_separation / 2) * min(2, self.board_size[i])
             board_image_size[i] = round(board_image_size[i])
         return board_image_size, pix
 
@@ -284,7 +291,8 @@ class SyntheticAruco(SyntheticObject):
         self.grid_board = cv.aruco.GridBoard(board_size, 1., marker_separation, self.dict)
         board_image_size, pix = self.__get_size(cell_img_size)
         self.image = self.grid_board.generateImage(board_image_size)
-        self.aruco_corners = (np.array(self.grid_board.getObjPoints(), dtype=np.float32) * pix).reshape(-1, 3)[:, :-1]
+        self.aruco_corners = np.round((np.array(self.grid_board.getObjPoints(),
+                                                dtype=np.float32) * pix).reshape(-1, 3)[:, :-1])
         self.aruco_ids = np.array(self.grid_board.getIds())
         self.fields = {"board_size": None, "marker_separation": None, "dict_id": None, "aruco_corners": None,
                        "aruco_ids": None}
@@ -330,44 +338,131 @@ class SyntheticAruco(SyntheticObject):
         self.image = cv.imread(path + "/" + filename + ".png", cv.IMREAD_GRAYSCALE)
 
 
-def check_aruco(synthetic_aruco, marker_corners, marker_ids, accuracy, type_dist):
-    gold = {}
-    gold_corners, gold_ids = synthetic_aruco.aruco_corners.reshape(-1, 4, 2), \
-        synthetic_aruco.aruco_ids
-    for marker_id, marker in zip(gold_ids, gold_corners):
-        gold[int(marker_id)] = marker
-    dist = 0.
-    detected_count = 0
-    total_count = len(gold_ids)
-    detected = {}
-    if len(marker_ids) > 0:
-        for marker_id, marker in zip(marker_ids, marker_corners):
-            detected[int(marker_id)] = marker.reshape(4, 2)
-        for gold_id in gold_ids:
+def set_plt():
+    # Turn interactive plotting off
+    plt.ioff()
+    plt.rcParams["figure.figsize"] = (15, 9)
+    plt.rcParams["figure.subplot.bottom"] = 0.3
+    plt.rcParams["figure.subplot.left"] = 0.05
+    plt.rcParams["figure.subplot.right"] = 0.99
+
+
+def get_and_print_category_statistic(obj_type, category, statistics, accuracy, path):
+    objs = np.array(list(deepflatten(statistics)))
+    detected = objs[objs < accuracy]
+    category_statistic = {"category": category, "detected " + obj_type: len(detected)/max(1, len(objs)),
+                          "total detected " + obj_type: len(detected), "total " + obj_type: len(objs),
+                          "average error " + obj_type: np.mean(detected)}
+    data_frame = pd.DataFrame(objs)
+    data_frame.hist(bins=500)
+    plt.title(category + ' ' + obj_type)
+    plt.xlabel('error')
+    plt.xticks(np.arange(0., float(accuracy)+.25, .25))
+    plt.ylabel('frequency')
+    # plt.show()
+    plt.savefig(path + '/' + category + '_' + obj_type + '.jpg')
+    plt.close()
+    return category_statistic
+
+
+def get_time():
+    return datetime.datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
+
+
+def print_statistics(distances, accuracy, output_path, per_image_statistic):
+    filename = "report_" + get_time()
+    with open(output_path + "/" + filename + '.json', 'w') as fp:
+        json.dump(distances, fp, cls=NumpyEncoder)
+    output_dict = output_path + '/' + filename
+    os.mkdir(output_dict)
+    result = []
+    set_plt()
+    for obj_type, statistics in distances.items():
+        for category, image_names, category_statistics in zip(statistics[0], statistics[1], statistics[2]):
+            result.append(get_and_print_category_statistic(obj_type, category, category_statistics, accuracy, output_dict))
+            if not per_image_statistic:
+                continue
+            if not os.path.exists(output_dict + '/' + category):
+                os.mkdir(output_dict + '/' + category)
+            for image_name, image_statistics in zip(image_names, category_statistics):
+                data_frame = pd.DataFrame({"error": image_statistics})
+                data_frame.plot.bar(y='error')
+                plt.xlabel('id')
+                plt.ylabel('error')
+                plt.savefig(output_dict + '/' + category + '/' + obj_type + '_' + image_name + '.jpg')
+                plt.close()
+        result.append(get_and_print_category_statistic(obj_type, 'all', statistics[2], accuracy, output_dict))
+    if len(result) > 0:
+        data_frame = pd.DataFrame(result).groupby('category', as_index=False, sort=False).last()
+        print(data_frame.to_string(index=False))
+    else:
+        print("no data found, use --configuration=generate_run or --configuration=generate")
+
+
+def read_distances(filename):
+    distances = {}
+    with open(filename, 'r') as fp:
+        distances = json.load(fp)
+    return distances
+
+
+class Checker:
+    def __init__(self, accuracy, type_dist, path):
+        self.accuracy = accuracy
+        self.type_dist = type_dist
+        self.path = path
+
+    @staticmethod
+    def get_obj_names():
+        return ["empty"]
+
+
+class ArucoChecker(Checker):
+    def __init__(self, accuracy, type_dist, path, read_params=True):
+        super().__init__(accuracy, type_dist, path)
+        self.aruco_params = cv.aruco.DetectorParameters()
+        ArucoChecker.update_aruco_params(self.aruco_params, path, read_params)
+
+    @staticmethod
+    def update_aruco_params(aruco_params, path, read_params):
+        if read_params and os.path.isfile(path+"/aruco_params.yml"):
+            fs_read = cv.FileStorage(path+"/aruco_params.yml", cv.FileStorage_READ)
+            aruco_params.readDetectorParameters(fs_read.root())
+            fs_read.release()
+        else:
+            fs_write = cv.FileStorage(path+"/aruco_params.yml", cv.FileStorage_WRITE)
+            aruco_params.writeDetectorParameters(fs_write)
+            fs_write.release()
+
+    @staticmethod
+    def get_obj_names():
+        return ["aruco"]
+
+    @staticmethod
+    def check_aruco(synthetic_aruco, marker_corners, marker_ids, accuracy, type_dist):
+        gold = {}
+        gold_corners, gold_ids = synthetic_aruco.aruco_corners.reshape(-1, 4, 2), \
+            synthetic_aruco.aruco_ids
+        for marker_id, marker in zip(gold_ids, gold_corners):
+            gold[int(marker_id)] = marker
+        detected = {}
+        if marker_ids is not None and len(marker_ids) > 0:
+            for marker_id, marker in zip(marker_ids, marker_corners):
+                detected[int(marker_id)] = marker.reshape(4, 2)
+        max_error = get_max_error(accuracy, type_dist)
+        distances = np.full(len(gold_ids), max_error)
+        for i, gold_id in enumerate(gold_ids):
             gold_corner = gold_corners[int(gold_id)]
             if int(gold_id) in detected:
                 corner = detected[int(gold_id)]
-                loc_dist = get_norm(gold_corner, corner, type_dist)
-                if loc_dist < accuracy:
-                    dist += loc_dist
-                    detected_count += 1
-    return detected_count, total_count, dist
-
-
-class ArucoChecker:
-    def __init__(self, accuracy, type_dist):
-        self.accuracy = accuracy
-        self.type_dist = type_dist
+                distances[i] = min(max_error, get_norm(gold_corner, corner, type_dist))
+        return distances
 
     def detect_and_check(self, synthetic_aruco):
-        aruco_detector = cv.aruco.ArucoDetector(synthetic_aruco.grid_board.getDictionary())
+        aruco_detector = cv.aruco.ArucoDetector(synthetic_aruco.grid_board.getDictionary(), self.aruco_params)
         marker_corners, marker_ids, _ = aruco_detector.detectMarkers(synthetic_aruco.image)
-        return check_aruco(synthetic_aruco, marker_corners, marker_ids, self.accuracy, self.type_dist)
-
-    def formatting_result(self, category, res):
-        print("category:", category)
-        print("detected aruco:", res[0] / res[1], "total aruco:", res[1], "distance:", res[2] / max(res[1], 1))
-        print()
+        ar_dist = ArucoChecker.check_aruco(synthetic_aruco, marker_corners, marker_ids, self.accuracy, self.type_dist)
+        return {self.get_obj_names()[0]: ar_dist}
 
 
 class SyntheticCharuco(SyntheticObject):
@@ -379,8 +474,8 @@ class SyntheticCharuco(SyntheticObject):
         self.charuco_board = cv.aruco.CharucoBoard(board_size, 1., 1. * square_marker_length_rate, self.dict)
         board_image_size = [board_size[0] * cell_img_size, board_size[1] * cell_img_size]
         self.image = self.charuco_board.generateImage(board_image_size)
-        self.aruco_corners = (np.array(self.charuco_board.getObjPoints(), dtype=np.float32)
-                              * cell_img_size).reshape(-1, 3)[:, :-1]
+        self.aruco_corners = np.round((np.array(self.charuco_board.getObjPoints(), dtype=np.float32)
+                                       * cell_img_size).reshape(-1, 3)[:, :-1])
         self.aruco_ids = np.array(self.charuco_board.getIds())
         self.chessboard_corners = (np.array(self.charuco_board.getChessboardCorners(), dtype=np.float32)
                                    * cell_img_size)[:, :-1]
@@ -434,10 +529,15 @@ class SyntheticCharuco(SyntheticObject):
         self.image = cv.imread(path + "/" + filename + ".png", cv.IMREAD_GRAYSCALE)
 
 
-class CharucoChecker:
-    def __init__(self, accuracy, type_dist):
-        self.accuracy = accuracy
-        self.type_dist = type_dist
+class CharucoChecker(Checker):
+    def __init__(self, accuracy, type_dist, path="", read_params=True):
+        super().__init__(accuracy, type_dist, path)
+        self.aruco_params = cv.aruco.DetectorParameters()
+        ArucoChecker.update_aruco_params(self.aruco_params, path, read_params)
+
+    @staticmethod
+    def get_obj_names():
+        return ["aruco", "chessboard"]
 
     def _check_charuco(self, synthetic_charuco, charuco_corners, charuco_ids):
         gold = {}
@@ -448,32 +548,24 @@ class CharucoChecker:
         if charuco_ids is not None and len(charuco_ids) > 0:
             for charuco_id, charuco_corner in zip(charuco_ids, charuco_corners):
                 detected[int(charuco_id)] = charuco_corner
-        dist = 0.
-        detected_count = 0
+        max_error = get_max_error(self.accuracy, self.type_dist)
         total_count = len(gold_corners)
-        for gold_id in range(total_count):
+        distances = np.full(total_count, max_error)
+        for i, gold_id in enumerate(range(total_count)):
             gold_corner = gold_corners[int(gold_id)]
             if int(gold_id) in detected:
                 corner = detected[int(gold_id)]
-                loc_dist = get_norm(gold_corner, corner, self.type_dist)
-                if loc_dist < self.accuracy:
-                    dist += loc_dist
-                    detected_count += 1
-        return detected_count, total_count, dist
+                distances[i] = min(max_error, get_norm(gold_corner, corner, self.type_dist))
+        return distances
 
     def detect_and_check(self, synthetic_charuco):
         charuco_detector = cv.aruco.CharucoDetector(synthetic_charuco.charuco_board)
+        charuco_detector.setDetectorParameters(self.aruco_params)
         charuco_corners, charuco_ids, marker_corners, marker_ids = charuco_detector.detectBoard(synthetic_charuco.image)
-        ar_detected, ar_total, ar_dist = check_aruco(synthetic_charuco, marker_corners, marker_ids, self.accuracy,
-                                                     self.type_dist)
-        ch_detected, ch_total, ch_dist = self._check_charuco(synthetic_charuco, charuco_corners, charuco_ids)
-        return ar_detected, ar_total, ar_dist, ch_detected, ch_total, ch_dist
+        ar_dist = ArucoChecker.check_aruco(synthetic_charuco, marker_corners, marker_ids, self.accuracy, self.type_dist)
 
-    def formatting_result(self, category, res):
-        print("category:", category)
-        print("detected aruco:", res[0] / res[1], "total aruco:", res[1], "distance:", res[2] / max(res[1], 1),
-              "detected charuco:", res[3] / res[4], "total charuco:", res[4], "distance:", res[5] / max(res[4], 1))
-        print()
+        ch_dist = self._check_charuco(synthetic_charuco, charuco_corners, charuco_ids)
+        return {self.get_obj_names()[0]: ar_dist, self.get_obj_names()[1]: ch_dist}
 
 
 class SyntheticChessboard(SyntheticObject):
@@ -526,47 +618,42 @@ class SyntheticChessboard(SyntheticObject):
         self.image = cv.imread(path + "/" + filename + ".png", cv.IMREAD_GRAYSCALE)
 
 
-class ChessboardChecker:
-    def __init__(self, accuracy, type_dist):
-        self.accuracy = accuracy
-        self.type_dist = type_dist
+class ChessboardChecker(Checker):
+    @staticmethod
+    def get_obj_names():
+        return ["chessboard"]
 
     def __check_chessboard(self, synthetic_chessboard, corners):
         gold = {}
         gold_corners = synthetic_chessboard.chessboard_corners.reshape(-1, 2)
-        dist = 0
-        detected_count = 0
+        max_error = get_max_error(self.accuracy, self.type_dist)
         total_count = len(gold_corners)
+        distances = np.full(total_count, max_error)
         if corners is not None:
             for i, gold_corner in enumerate(gold_corners):
-                loc_dist = np.min([get_norm(gold_corner, corner, self.type_dist) for corner in corners])
-                if loc_dist < self.accuracy:
-                    dist += loc_dist
-                    detected_count += 1
-        return detected_count, total_count, dist
+                distances[i] = min(max_error, np.min([get_norm(gold_corner, corner, self.type_dist)
+                                                      for corner in corners]))
+        return distances
 
     def detect_and_check(self, synthetic_chessboard):
         criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
         gray = synthetic_chessboard.image
         # Find the chess board corners
-        chessboard = (synthetic_chessboard.board_size[1]-1, synthetic_chessboard.board_size[0]-1)
+        chessboard = (synthetic_chessboard.board_size[1] - 1, synthetic_chessboard.board_size[0] - 1)
         ret, corners = cv.findChessboardCorners(gray, chessboard, criteria)
 
         # If found, add object points, image points (after refining them)
         if ret is True:
             corners = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-        return self.__check_chessboard(synthetic_chessboard, corners)
-
-    def formatting_result(self, category, res):
-        print("category:", category)
-        print("detected chessboard corners:", res[0] / res[1], "total chessboard corners:", res[1], "distance:",
-              res[2] / max(res[1], 1), "\n")
+        ch_dist = self.__check_chessboard(synthetic_chessboard, corners)
+        return {self.get_obj_names()[0]: ch_dist}
 
 
 def generate_dataset(args, synthetic_object, background_color=0):
     output = args.dataset_path
-    background = BackGroundObject(num_rows=int(synthetic_object.image.shape[0] * 2.),
-                                  num_cols=int(synthetic_object.image.shape[1] * 2.), color=background_color)
+    background = BackGroundObject(num_rows=synthetic_object.image.shape[0] * 2,
+                                  num_cols=synthetic_object.image.shape[1] * 2,
+                                  color=background_color)
     rel_center_x, rel_center_y = args.rel_center_x, args.rel_center_y
     pasting_object = PastingTransform(background_object=background, rel_center=(rel_center_y, rel_center_x))
     synthetic_object.transform_object(pasting_object)
@@ -581,24 +668,24 @@ def generate_dataset(args, synthetic_object, background_color=0):
     perspective_t3 = PerspectiveTransform(img_size=synthetic_object.image.shape, yaw=0.5, pitch=0.5)
     undistort_t = UndistortFisheyeTransform(img_size=synthetic_object.image.shape)
     transforms_list = [[perspective_t1, perspective_t2, perspective_t3, empty_t],
-                       [undistort_t, empty_t],
-                       [blur_t, gauss_noise_t, empty_t]]
+                      [undistort_t, empty_t],
+                      [blur_t, gauss_noise_t, empty_t]]
     transforms_comb = list(itertools.product(*transforms_list))
 
-    count = 0
-    for angle in range(0, 360, 31):
-        for transforms in transforms_comb:
+    dictionary = {}
+    for transforms in transforms_comb:
+        for angle in range(0, 360, 31):
             synthetic_object.read(output)
             rotate_t = RotateTransform(angle=angle, rel_center=(rel_center_x, rel_center_y))
             synthetic_object.transform_object(rotate_t)
             for transform in transforms:
                 synthetic_object.transform_object(transform)
-            folder = '_'.join(synthetic_object.history)
+            folder = '_' + '_'.join(synthetic_object.history)
+            dictionary[folder] = dictionary.get(folder, -1) + 1
             if not os.path.exists(output + "/" + folder):
                 os.mkdir(output + "/" + folder)
-            synthetic_object.write(output + "/" + folder, str(count) + '_' + str(angle))
-            count += 1
-            # synthetic_object.show()
+            synthetic_object.write(output + "/" + folder, folder + '_' + str(dictionary[folder]))
+        # synthetic_object.show()
 
 
 def main():
@@ -606,9 +693,12 @@ def main():
     parser = argparse.ArgumentParser(description="augmentation benchmark", add_help=False)
     parser.add_argument("-H", "--help", help="show help", action="store_true", dest="show_help")
     parser.add_argument("--configuration", help="script launch configuration", default="generate_run", action="store",
-                        dest="configuration", choices=['generate_run', 'generate', 'run'], type=str)
-    parser.add_argument("-p", "--path", help="input/output dataset path", default="", action="store",
+                        dest="configuration", choices=['generate_run', 'generate', 'run', 'show'], type=str)
+    parser.add_argument("-p", "--path", help="input/output dataset path", default=".", action="store",
                         dest="dataset_path")
+    parser.add_argument("-d1", help="d1", default="", action="store", dest="d1")
+    parser.add_argument("-d2", help="d2", default="", action="store", dest="d2")
+    parser.add_argument("--per_image_statistic", help="print the per image statistic", action="store_true")
     parser.add_argument("-a", "--accuracy", help="input accuracy", default="10", action="store", dest="accuracy",
                         type=float)
     parser.add_argument("--marker_length_rate", help="square marker length rate for charuco", default=".5",
@@ -633,6 +723,8 @@ def main():
         return
 
     dataset_path = args.dataset_path
+    if not os.path.exists(dataset_path):
+        os.mkdir(dataset_path)
     accuracy = args.accuracy
     metric = TypeNorm.l_inf
     if args.metric == "l1":
@@ -648,16 +740,16 @@ def main():
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticCharuco(board_size=board_size, cell_img_size=cell_img_size,
                                             square_marker_length_rate=args.marker_length_rate)
-        checker = CharucoChecker(accuracy, metric)
+        checker = CharucoChecker(accuracy, metric, dataset_path)
     elif args.synthetic_object == "aruco":
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticAruco(board_size=board_size, cell_img_size=cell_img_size,
                                           marker_separation=args.marker_length_rate)
-        checker = ArucoChecker(accuracy, metric)
+        checker = ArucoChecker(accuracy, metric, dataset_path)
     elif args.synthetic_object == "chessboard":
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticChessboard(board_size=board_size, cell_img_size=cell_img_size)
-        checker = ChessboardChecker(accuracy, metric)
+        checker = ChessboardChecker(accuracy, metric, dataset_path)
     else:
         synthetic_object = None
 
@@ -666,19 +758,46 @@ def main():
         generate_dataset(args, synthetic_object)
         if configuration == "generate":
             return
+    elif configuration == "show":
+        distances1 = read_distances(dataset_path+'/'+args.d1)
+        distances3 = distances1
+        if args.d2 != '':
+            distances2 = read_distances(dataset_path + '/' + args.d2)
+            for key, value in distances1.items():
+                if key in distances2:
+                    for i, category in enumerate(value[2]):
+                        for j, image in enumerate(category):
+                            for k, corner in enumerate(image):
+                                distances3[key][2][i][j][k] = corner - distances2[key][2][i][j][k]
+        print_statistics(distances3, accuracy, dataset_path, args.per_image_statistic)
+        return
 
     print("distance threshold:", checker.accuracy, "\n")
 
     list_folders = next(os.walk(dataset_path))[1]
+    error_by_categories = {}
     for folder in list_folders:
+        if folder[0] != '_':
+            continue
         configs = glob.glob(dataset_path + '/' + folder + '/*.json')
-        res = None
+        distances = {}
+        for name in checker.get_obj_names():
+            distances[name] = [[], []]
         for config in configs:
-            synthetic_object.read(dataset_path + '/' + folder, config.split('/')[-1].split('\\')[-1].split('.')[0])
-            # charuco_object.show()
-            res = res + np.array(checker.detect_and_check(synthetic_object)) if res is not None \
-                else np.array(checker.detect_and_check(synthetic_object))
-        checker.formatting_result(folder, res)
+            config_name = config.split('/')[-1].split('\\')[-1].split('.')[0]
+            synthetic_object.read(dataset_path + '/' + folder, config_name)
+            # synthetic_object.show()
+            distance = checker.detect_and_check(synthetic_object)
+            for key, value in distance.items():
+                distances[key][0] += [config_name]
+                distances[key][1] += [value]
+        for key, value in distances.items():
+            if key not in error_by_categories:
+                error_by_categories[key] = [[], [], []]
+            error_by_categories[key][0].append(folder)
+            error_by_categories[key][1].append(value[0])
+            error_by_categories[key][2].append(value[1])
+    print_statistics(error_by_categories, accuracy, dataset_path, args.per_image_statistic)
 
 
 if __name__ == '__main__':

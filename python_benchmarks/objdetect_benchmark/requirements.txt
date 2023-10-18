@@ -1,0 +1,5 @@
+# opencv-python install with pip or build manually
+numpy
+pandas
+matplotlib
+iteration-utilities
