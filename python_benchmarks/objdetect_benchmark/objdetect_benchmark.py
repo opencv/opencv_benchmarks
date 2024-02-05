@@ -653,7 +653,7 @@ class ChessboardChecker(Checker):
         # Find the chess board corners
         global total_time
         start = datetime.datetime.now()
-        ret, corners = cv.findChessboardCorners(gray, [synthetic_chessboard.pattern_size[1], synthetic_chessboard.pattern_size[0]], criteria)
+        ret, corners = cv.findChessboardCorners(gray, synthetic_chessboard.pattern_size, criteria)
 
         # If found, add object points, image points (after refining them)
         if ret is True:
