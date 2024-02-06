@@ -267,6 +267,13 @@ class SyntheticObject:
     def show(self, wait_key=0):
         pass
 
+    def write(self, path="test", filename="test"):
+        for name in self.fields:
+            self.fields[name] = getattr(self, name)
+        with open(path + "/" + filename + '.json', 'w') as fp:
+            json.dump(self.fields, fp, cls=NumpyEncoder)
+        cv.imwrite(path + "/" + filename + ".png", self.image)
+
 
 class BackGroundObject(SyntheticObject):
     def __init__(self, *, num_rows, num_cols, color=0):
@@ -322,13 +329,6 @@ class SyntheticAruco(SyntheticObject):
         cv.aruco.drawDetectedMarkers(image, aruco)
         cv.imshow("SyntheticAruco", image)
         cv.waitKey(wait_key)
-
-    def write(self, path="test", filename="test"):
-        for name in self.fields:
-            self.fields[name] = getattr(self, name)
-        with open(path + "/" + filename + '.json', 'w') as fp:
-            json.dump(self.fields, fp, cls=NumpyEncoder)
-        cv.imwrite(path + "/" + filename + ".png", self.image)
 
     def read(self, path="test", filename="test"):
         with open(path + "/" + filename + ".json", 'r') as fp:
@@ -515,13 +515,6 @@ class SyntheticCharuco(SyntheticObject):
         cv.imshow("SyntheticCharuco", image)
         cv.waitKey(wait_key)
 
-    def write(self, path="test", filename="test"):
-        for name in self.fields:
-            self.fields[name] = getattr(self, name)
-        with open(path + "/" + filename + '.json', 'w') as fp:
-            json.dump(self.fields, fp, cls=NumpyEncoder)
-        cv.imwrite(path + "/" + filename + ".png", self.image)
-
     def read(self, path="test", filename="test"):
         with open(path + "/" + filename + ".json", 'r') as fp:
             data_loaded = json.load(fp)
@@ -609,16 +602,9 @@ class SyntheticChessboard(SyntheticObject):
         assert self.image is not None
         image = np.copy(self.image)
         chessboard_corners = self.chessboard_corners.reshape(-1, 1, 2)
-        cv.aruco.drawDetectedCornersCharuco(image, chessboard_corners)
+        cv.drawChessboardCorners(image, self.pattern_size, chessboard_corners, True)
         cv.imshow("SyntheticChessboard", image)
         cv.waitKey(wait_key)
-
-    def write(self, path="test", filename="test"):
-        for name in self.fields:
-            self.fields[name] = getattr(self, name)
-        with open(path + "/" + filename + '.json', 'w') as fp:
-            json.dump(self.fields, fp, cls=NumpyEncoder)
-        cv.imwrite(path + "/" + filename + ".png", self.image)
 
     def read(self, path="test", filename="test"):
         with open(path + "/" + filename + ".json", 'r') as fp:
@@ -713,16 +699,9 @@ class SyntheticCircleGrid(SyntheticObject):
         assert self.image is not None
         image = np.copy(self.image)
         circle_centers = self.circle_centers.reshape(-1, 1, 2)
-        cv.aruco.drawDetectedCornersCharuco(image, circle_centers)
+        cv.drawChessboardCorners(image, self.board_size, circle_centers, True)
         cv.imshow("SyntheticCircleGrid", image)
         cv.waitKey(wait_key)
-
-    def write(self, path="test", filename="test"):
-        for name in self.fields:
-            self.fields[name] = getattr(self, name)
-        with open(path + "/" + filename + '.json', 'w') as fp:
-            json.dump(self.fields, fp, cls=NumpyEncoder)
-        cv.imwrite(path + "/" + filename + ".png", self.image)
 
     def read(self, path="test", filename="test"):
         with open(path + "/" + filename + ".json", 'r') as fp:
@@ -763,8 +742,8 @@ class CircleGridChecker(Checker):
         ret, circle_centers = cv.findCirclesGrid(gray, synthetic_circle_board.board_size, flags=grid_type,
                                                  blobDetector=detector)
         total_time += (datetime.datetime.now() - start).total_seconds()
-        # if ret is False:
-        #     circle_centers = None
+        if ret is False:
+            circle_centers = None
         circle_dist = self.__check_circle_board(synthetic_circle_board, circle_centers)
         if show_detected:
             cv.drawChessboardCorners(gray, synthetic_circle_board.board_size, circle_centers, ret)
