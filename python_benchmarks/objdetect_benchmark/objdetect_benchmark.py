@@ -14,12 +14,14 @@ python objdetect_benchmark.py -p path
 --rel_center_x - relative x-axis location of the center of the board in the image (default 0.5)
 --rel_center_y - relative y-axis location of the center of the board in the image (default 0.5)
 --synthetic_object - type of synthetic object: aruco or charuco or chessboard (default charuco)
+--radius_rate - circles_radius = cell_img_size/radius_rate (default 5.0)
 """
 
 import argparse
 from enum import Enum
 import numpy as np
 from numpy import linalg as LA
+from collections import OrderedDict
 import json
 import itertools
 import glob
@@ -29,6 +31,8 @@ import pandas as pd
 import datetime
 import matplotlib.pyplot as plt
 from iteration_utilities import deepflatten
+
+total_time = 0.
 
 # l_1 - https://en.wikipedia.org/wiki/Norm_(mathematics)
 # l_inf - Chebyshev norm https://en.wikipedia.org/wiki/Chebyshev_distance
@@ -263,6 +267,13 @@ class SyntheticObject:
     def show(self, wait_key=0):
         pass
 
+    def write(self, path="test", filename="test"):
+        for name in self.fields:
+            self.fields[name] = getattr(self, name)
+        with open(path + "/" + filename + '.json', 'w') as fp:
+            json.dump(self.fields, fp, cls=NumpyEncoder)
+        cv.imwrite(path + "/" + filename + ".png", self.image)
+
 
 class BackGroundObject(SyntheticObject):
     def __init__(self, *, num_rows, num_cols, color=0):
@@ -319,13 +330,6 @@ class SyntheticAruco(SyntheticObject):
         cv.imshow("SyntheticAruco", image)
         cv.waitKey(wait_key)
 
-    def write(self, path="test", filename="test"):
-        for name in self.fields:
-            self.fields[name] = getattr(self, name)
-        with open(path + "/" + filename + '.json', 'w') as fp:
-            json.dump(self.fields, fp, cls=NumpyEncoder)
-        cv.imwrite(path + "/" + filename + ".png", self.image)
-
     def read(self, path="test", filename="test"):
         with open(path + "/" + filename + ".json", 'r') as fp:
             data_loaded = json.load(fp)
@@ -350,9 +354,10 @@ def set_plt():
 def get_and_print_category_statistic(obj_type, category, statistics, accuracy, path):
     objs = np.array(list(deepflatten(statistics)))
     detected = objs[objs < accuracy]
-    category_statistic = {"category": category, "detected " + obj_type: len(detected)/max(1, len(objs)),
-                          "total detected " + obj_type: len(detected), "total " + obj_type: len(objs),
-                          "average error " + obj_type: np.mean(detected)}
+    category_statistic = OrderedDict(
+        [("category", category), ("detected " + obj_type, len(detected) / max(1, len(objs))),
+         ("total detected " + obj_type, len(detected)), ("total " + obj_type, len(objs)),
+         ("average detected error " + obj_type, np.mean(detected))])
     data_frame = pd.DataFrame(objs)
     data_frame.hist(bins=500)
     plt.title(category + ' ' + obj_type)
@@ -393,8 +398,9 @@ def print_statistics(distances, accuracy, output_path, per_image_statistic):
                 plt.close()
         result.append(get_and_print_category_statistic(obj_type, 'all', statistics[2], accuracy, output_dict))
     if len(result) > 0:
-        data_frame = pd.DataFrame(result).groupby('category', as_index=False, sort=False).last()
+        data_frame = pd.DataFrame(result, columns=result[0].keys()).groupby('category', as_index=False, sort=True).last()
         print(data_frame.to_string(index=False))
+        print("total_time: ", total_time)
     else:
         print("no data found, use --configuration=generate_run or --configuration=generate")
 
@@ -441,8 +447,7 @@ class ArucoChecker(Checker):
     @staticmethod
     def check_aruco(synthetic_aruco, marker_corners, marker_ids, accuracy, type_dist):
         gold = {}
-        gold_corners, gold_ids = synthetic_aruco.aruco_corners.reshape(-1, 4, 2), \
-            synthetic_aruco.aruco_ids
+        gold_corners, gold_ids = synthetic_aruco.aruco_corners.reshape(-1, 4, 2), synthetic_aruco.aruco_ids
         for marker_id, marker in zip(gold_ids, gold_corners):
             gold[int(marker_id)] = marker
         detected = {}
@@ -460,7 +465,10 @@ class ArucoChecker(Checker):
 
     def detect_and_check(self, synthetic_aruco):
         aruco_detector = cv.aruco.ArucoDetector(synthetic_aruco.grid_board.getDictionary(), self.aruco_params)
+        global total_time
+        start = datetime.datetime.now()
         marker_corners, marker_ids, _ = aruco_detector.detectMarkers(synthetic_aruco.image)
+        total_time += (datetime.datetime.now() - start).total_seconds()
         ar_dist = ArucoChecker.check_aruco(synthetic_aruco, marker_corners, marker_ids, self.accuracy, self.type_dist)
         return {self.get_obj_names()[0]: ar_dist}
 
@@ -506,13 +514,6 @@ class SyntheticCharuco(SyntheticObject):
         cv.aruco.drawDetectedCornersCharuco(image, chessboard_corners)
         cv.imshow("SyntheticCharuco", image)
         cv.waitKey(wait_key)
-
-    def write(self, path="test", filename="test"):
-        for name in self.fields:
-            self.fields[name] = getattr(self, name)
-        with open(path + "/" + filename + '.json', 'w') as fp:
-            json.dump(self.fields, fp, cls=NumpyEncoder)
-        cv.imwrite(path + "/" + filename + ".png", self.image)
 
     def read(self, path="test", filename="test"):
         with open(path + "/" + filename + ".json", 'r') as fp:
@@ -561,7 +562,10 @@ class CharucoChecker(Checker):
     def detect_and_check(self, synthetic_charuco):
         charuco_detector = cv.aruco.CharucoDetector(synthetic_charuco.charuco_board)
         charuco_detector.setDetectorParameters(self.aruco_params)
+        global total_time
+        start = datetime.datetime.now()
         charuco_corners, charuco_ids, marker_corners, marker_ids = charuco_detector.detectBoard(synthetic_charuco.image)
+        total_time += (datetime.datetime.now() - start).total_seconds()
         ar_dist = ArucoChecker.check_aruco(synthetic_charuco, marker_corners, marker_ids, self.accuracy, self.type_dist)
 
         ch_dist = self._check_charuco(synthetic_charuco, charuco_corners, charuco_ids)
@@ -571,6 +575,7 @@ class CharucoChecker(Checker):
 class SyntheticChessboard(SyntheticObject):
     def __init__(self, *, board_size, cell_img_size):
         self.board_size = board_size
+        self.pattern_size = [board_size[0] - 1, board_size[1] - 1]
         board_image_size = [board_size[0] * cell_img_size, board_size[1] * cell_img_size]
         self.image = ((np.indices((board_size[1], board_size[0])).sum(axis=0) % 2) * 255).astype(dtype=np.uint8)
         self.image = cv.resize(self.image, board_image_size, interpolation=cv.INTER_NEAREST)
@@ -597,16 +602,9 @@ class SyntheticChessboard(SyntheticObject):
         assert self.image is not None
         image = np.copy(self.image)
         chessboard_corners = self.chessboard_corners.reshape(-1, 1, 2)
-        cv.aruco.drawDetectedCornersCharuco(image, chessboard_corners)
+        cv.drawChessboardCorners(image, self.pattern_size, chessboard_corners, True)
         cv.imshow("SyntheticChessboard", image)
         cv.waitKey(wait_key)
-
-    def write(self, path="test", filename="test"):
-        for name in self.fields:
-            self.fields[name] = getattr(self, name)
-        with open(path + "/" + filename + '.json', 'w') as fp:
-            json.dump(self.fields, fp, cls=NumpyEncoder)
-        cv.imwrite(path + "/" + filename + ".png", self.image)
 
     def read(self, path="test", filename="test"):
         with open(path + "/" + filename + ".json", 'r') as fp:
@@ -635,18 +633,123 @@ class ChessboardChecker(Checker):
                                                       for corner in corners]))
         return distances
 
-    def detect_and_check(self, synthetic_chessboard):
+    def detect_and_check(self, synthetic_chessboard, show_detected=False):
         criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
         gray = synthetic_chessboard.image
         # Find the chess board corners
-        chessboard = (synthetic_chessboard.board_size[1] - 1, synthetic_chessboard.board_size[0] - 1)
-        ret, corners = cv.findChessboardCorners(gray, chessboard, criteria)
+        global total_time
+        start = datetime.datetime.now()
+        ret, corners = cv.findChessboardCorners(gray, synthetic_chessboard.pattern_size, criteria)
 
         # If found, add object points, image points (after refining them)
         if ret is True:
             corners = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+        total_time += (datetime.datetime.now() - start).total_seconds()
         ch_dist = self.__check_chessboard(synthetic_chessboard, corners)
+        if show_detected:
+            print(corners)
+            cv.drawChessboardCorners(gray, synthetic_chessboard.pattern_size, corners, ret)
+            cv.imshow("CircleGridDetect", gray)
+            cv.waitKey(0)
         return {self.get_obj_names()[0]: ch_dist}
+
+
+class SyntheticCircleGrid(SyntheticObject):
+    def __init__(self, *, board_size, cell_img_size, circle_radius, grid_type):
+        self.board_size = board_size
+        self.circle_radius = circle_radius
+        self.grid_type = grid_type
+        if grid_type == "circle_sym_grid":
+            board_image_size = [board_size[0] * cell_img_size, board_size[1] * cell_img_size]
+            self.circle_centers = np.zeros(((board_size[0]) * (board_size[1]), 2), np.float32)
+            self.circle_centers[:, :2] = np.mgrid[0:board_size[0], 0:board_size[1]].T.reshape(-1, 2)
+            self.circle_centers *= cell_img_size
+            self.circle_centers += cell_img_size / 2
+        elif grid_type == "circle_asym_grid":
+            board_image_size = [2*board_size[0] * cell_img_size, board_size[1] * cell_img_size]
+            self.circle_centers = np.zeros(((board_size[0]) * (board_size[1]), 2), np.float32)
+            tmp = np.array(np.mgrid[0:board_size[0], 0:board_size[1]].T, dtype=np.float32)
+            tmp[1::2, :, 0] += 0.5
+            self.circle_centers[:, :2] = tmp.reshape(-1, 2)
+            self.circle_centers *= cell_img_size
+            self.circle_centers[:, 0] *= 2
+            self.circle_centers += cell_img_size / 2
+        else:
+            raise TypeError("unknown synthetic_object: " + grid_type)
+        self.image = np.full((board_image_size[1], board_image_size[0]), 255, dtype=np.uint8)
+
+        for circle in self.circle_centers:
+            cv.circle(self.image, (round(circle[0]), round(circle[1])), self.circle_radius, (0, 0, 0), -1, cv.LINE_AA)
+
+        self.fields = {"board_size": None, "circle_centers": None}
+        self.history = []
+        background = BackGroundObject(num_rows=int(self.image.shape[0] + cell_img_size),
+                                      num_cols=int(self.image.shape[1] + cell_img_size), color=255)
+        pasting_object = PastingTransform(background_object=background)
+        self.transform_object(pasting_object)
+
+    def transform_object(self, transform_object):
+        self.image = transform_object.transform_image(self.image)
+        self.circle_centers = np.array(transform_object.transform_points(self.circle_centers), dtype=np.float32)
+        if transform_object.name != "":
+            self.history.append(transform_object.name)
+        return self
+
+    def show(self, wait_key=0):
+        assert self.image is not None
+        image = np.copy(self.image)
+        circle_centers = self.circle_centers.reshape(-1, 1, 2)
+        cv.drawChessboardCorners(image, self.board_size, circle_centers, True)
+        cv.imshow("SyntheticCircleGrid", image)
+        cv.waitKey(wait_key)
+
+    def read(self, path="test", filename="test"):
+        with open(path + "/" + filename + ".json", 'r') as fp:
+            data_loaded = json.load(fp)
+            for name, value in data_loaded.items():
+                setattr(self, name, value)
+            self.circle_centers = np.asarray(self.circle_centers)
+            self.history = []
+        self.image = cv.imread(path + "/" + filename + ".png", cv.IMREAD_GRAYSCALE)
+
+
+class CircleGridChecker(Checker):
+    @staticmethod
+    def get_obj_names():
+        return ["circle_board"]
+
+    def __check_circle_board(self, synthetic_circle_board, circle_centers):
+        gold = {}
+        gold_corners = synthetic_circle_board.circle_centers.reshape(-1, 2)
+        max_error = get_max_error(self.accuracy, self.type_dist)
+        total_count = len(gold_corners)
+        distances = np.full(total_count, max_error)
+        if circle_centers is not None:
+            for i, gold_corner in enumerate(gold_corners):
+                distances[i] = min(max_error, np.min([get_norm(gold_corner, circle_center, self.type_dist)
+                                                      for circle_center in circle_centers]))
+        return distances
+
+    def detect_and_check(self, synthetic_circle_board, show_detected=False):
+        grid_type = cv.CALIB_CB_SYMMETRIC_GRID if synthetic_circle_board.grid_type == "circle_sym_grid" \
+            else cv.CALIB_CB_ASYMMETRIC_GRID
+        gray = synthetic_circle_board.image
+        parameters = cv.SimpleBlobDetector_Params()
+        # parameters.filterByArea = False
+        detector = cv.SimpleBlobDetector_create(parameters)
+        global total_time
+        start = datetime.datetime.now()
+        ret, circle_centers = cv.findCirclesGrid(gray, synthetic_circle_board.board_size, flags=grid_type,
+                                                 blobDetector=detector)
+        total_time += (datetime.datetime.now() - start).total_seconds()
+        if ret is False:
+            circle_centers = None
+        circle_dist = self.__check_circle_board(synthetic_circle_board, circle_centers)
+        if show_detected:
+            cv.drawChessboardCorners(gray, synthetic_circle_board.board_size, circle_centers, ret)
+            cv.imshow("CircleGridDetect", gray)
+            cv.waitKey(0)
+        return {self.get_obj_names()[0]: circle_dist}
 
 
 def generate_dataset(args, synthetic_object, background_color=0):
@@ -714,7 +817,10 @@ def main():
     parser.add_argument("--metric", help="Metric for distance between result and gold", default="l_inf", action="store",
                         dest="metric", choices=['l1', 'l2', 'l_inf', 'intersection_over_union'], type=str)
     parser.add_argument("--synthetic_object", help="type of synthetic object", default="charuco", action="store",
-                        dest="synthetic_object", choices=['aruco', 'charuco', 'chessboard'], type=str)
+                        dest="synthetic_object", choices=['aruco', 'charuco', 'chessboard', 'circle_sym_grid',
+                                                          'circle_asym_grid'], type=str)
+    parser.add_argument("--radius_rate", help="circles_radius = cell_img_size/radius_rate (default 5.0)",
+                        default="5.", action="store", dest="radius_rate", type=float)
 
     args = parser.parse_args()
     show_help = args.show_help
@@ -750,8 +856,15 @@ def main():
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticChessboard(board_size=board_size, cell_img_size=cell_img_size)
         checker = ChessboardChecker(accuracy, metric, dataset_path)
+    elif args.synthetic_object == "circle_sym_grid" or args.synthetic_object == 'circle_asym_grid':
+        board_size = [args.board_x, args.board_y]
+        synthetic_object = SyntheticCircleGrid(board_size=board_size, cell_img_size=cell_img_size,
+                                               circle_radius=round(cell_img_size/args.radius_rate),
+                                               grid_type=args.synthetic_object)
+        checker = CircleGridChecker(accuracy, metric, dataset_path)
     else:
         synthetic_object = None
+        raise TypeError("unknown synthetic_object: " + args.synthetic_object)
 
     configuration = args.configuration
     if configuration == "generate" or configuration == "generate_run":
@@ -802,3 +915,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
