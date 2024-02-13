@@ -105,14 +105,21 @@ class DetectorQR:
                 cv.imshow("qr", image)
                 cv.waitKey(0)
 
+            nearest_gold_distance = np.full(len(corners), get_max_error(accuracy, metric))
+            nearest_gold_id = np.full(len(corners), -1)
+
             for i, gold_corner in enumerate(gold_corners):
                 for j, corner in enumerate(corners):
                     distance = get_norm_to_rotate_qr(gold_corner, corner, accuracy, metric)
                     if distance < nearest_distance_from_gold[i]:
                         nearest_distance_from_gold[i] = distance
                         nearest_id_from_gold[i] = j
-            for i, detected_id in enumerate(nearest_id_from_gold):
-                decoded_info_gold[i] = decoded_info[detected_id]
+                    if decoded_info[j] != "" and distance < nearest_gold_distance[j]:
+                        nearest_gold_distance[j] = distance
+                        nearest_gold_id[j] = i
+            for i, detected_id in enumerate(nearest_gold_id):
+                if detected_id != -1:
+                    decoded_info_gold[detected_id] = decoded_info[i]
         return nearest_distance_from_gold, decoded_info_gold
 
 
@@ -228,6 +235,12 @@ def set_plt():
 
 
 def get_and_print_category_statistic(obj_type, category, statistics, accuracy, path):
+    if obj_type == "decode":
+        decoded_info = list(deepflatten(statistics, ignore=str))
+        decoded = sum(1 for info in decoded_info if info != "")
+        category_statistic = OrderedDict(
+            [("category", category), ("decoded", decoded/len(decoded_info)), ("total decoded", decoded)])
+        return category_statistic
     objs = np.array(list(deepflatten(statistics)))
     detected = objs[objs < accuracy]
     category_statistic = OrderedDict(
@@ -271,8 +284,7 @@ def print_statistics(distances, accuracy, output_path, per_image_statistic):
                 plt.close()
         result.append(get_and_print_category_statistic(obj_type, 'all', statistics[2], accuracy, output_dict))
     if len(result) > 0:
-        data_frame = pd.DataFrame(result, columns=result[0].keys()).groupby('category', as_index=False,
-                                                                            sort=True).last()
+        data_frame = pd.DataFrame(result).groupby('category', as_index=False, sort=True).last()
         print(data_frame.to_string(index=False))
     else:
         print("no data found, use --configuration=generate_run or --configuration=generate")
@@ -322,7 +334,7 @@ def main():
     for directory in list_dirs:
         if directory.split('/')[-1].split('\\')[-1].split('_')[0] == "report":
             continue
-        distances = {"qr": [[], []]}
+        distances = {"qr": [[], []], "decode": [[], []]}
         category = directory.split('/')[-1].split('\\')[-1]
         category = '_' + category if category[0] != '_' else category
         images_path = find_images_path(directory)
@@ -333,7 +345,7 @@ def main():
             img_name = img_path[:-4].replace('\\', '_').replace('/', '_')
 
             nearest_distance_from_gold, decoded, = qr.detect_and_check(image, gold_corners, accuracy, metric)
-            distance = {"qr": nearest_distance_from_gold}
+            distance = {"qr": nearest_distance_from_gold, "decode": decoded}
             for key, value in distance.items():
                 distances[key][0] += [img_name]
                 distances[key][1] += [value]
