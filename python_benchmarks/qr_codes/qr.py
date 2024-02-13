@@ -4,21 +4,75 @@
 Usage example:
 python qr.py -o out.yaml -p qrcodes/detection
 -H, --help - show help
--o, --output - output file (default out.yaml)
+-o, --output - output path
 -p, --path - input dataset path (default qrcodes/detection)
+--per_image_statistic - print the per image statistic
 -a, --accuracy - input accuracy (default 20 pixels)
 -alg, --algorithm - input alg (default opencv)
 --metric - input norm (default l_inf)
 """
 
-import argparse
-import glob
-from enum import Enum
-
 import time
+import cv2 as cv
 import numpy as np
 from numpy import linalg as LA
-import cv2 as cv
+from collections import OrderedDict
+import argparse
+import os
+import glob
+import pandas as pd
+import datetime
+import matplotlib.pyplot as plt
+import json
+from enum import Enum
+from iteration_utilities import deepflatten
+
+# l_1 - https://en.wikipedia.org/wiki/Norm_(mathematics)
+# l_inf - Chebyshev norm https://en.wikipedia.org/wiki/Chebyshev_distance
+TypeNorm = Enum('TypeNorm', 'l1 l2 l3 l_inf intersection_over_union')
+
+
+def get_max_error(accuracy, metric):
+    if metric is TypeNorm.l1 or metric is TypeNorm.l2 or metric is TypeNorm.l_inf:
+        return 2 * accuracy
+    if metric is TypeNorm.intersection_over_union:
+        return 1.
+    raise TypeError("this TypeNorm isn't supported")
+
+
+def get_norm(gold_corner, corner, metric):
+    if metric is TypeNorm.l1:
+        return LA.norm((gold_corner - corner).flatten(), 1)
+    if metric is TypeNorm.l2 or metric is TypeNorm.intersection_over_union:
+        return LA.norm((gold_corner - corner).flatten(), 2)
+    if metric is TypeNorm.l_inf:
+        return LA.norm((gold_corner - corner).flatten(), np.inf)
+    raise TypeError("this TypeNorm isn't supported")
+
+
+def get_norm_to_rotate_qr(gold_corner, corner, accuracy, metric):
+    dist = get_max_error(accuracy, metric)
+
+    if metric is TypeNorm.intersection_over_union:
+        rect = cv.boundingRect(np.concatenate((gold_corner, corner), dtype=np.float32))
+        mask1 = np.zeros((rect[2], rect[3]), dtype=np.uint8)
+        mask1 = cv.fillConvexPoly(mask1, gold_corner.astype(np.int32) - (rect[0], rect[1]), 255)
+        mask2 = np.zeros((rect[2], rect[3]), dtype=np.uint8)
+        mask2 = cv.fillConvexPoly(mask2, np.rint(corner).astype(np.int32) - (rect[0], rect[1]), 255)
+        a = cv.countNonZero(cv.bitwise_and(mask2, mask1))
+        b = max(cv.countNonZero(cv.bitwise_or(mask2, mask1)), 1)
+        return 1. - a / b
+
+    dist = min(dist, get_norm(gold_corner, corner, metric))
+    for i in range(0, 3):
+        corner = np.roll(corner, 1, 0)
+        dist = min(dist, get_norm(gold_corner, corner, metric))
+    corner = np.flip(corner, 0)
+    dist = min(dist, get_norm(gold_corner, corner, metric))
+    for i in range(0, 3):
+        corner = np.roll(corner, 1, 0)
+        dist = min(dist, get_norm(gold_corner, corner, metric))
+    return dist
 
 
 class DetectorQR:
@@ -29,6 +83,38 @@ class DetectorQR:
         self.decoded_info = []
         self.detector = None
 
+    def detect_and_decode(self, image):
+        return False, self.decoded_info, self.detected_corners
+
+    def detect_and_check(self, image, gold_corners, accuracy, metric, show_detected=False):
+        ret, decoded_info, corners = self.detect_and_decode(image)
+
+        nearest_distance_from_gold = np.full(len(gold_corners), get_max_error(accuracy, metric))
+        nearest_id_from_gold = np.full(len(gold_corners), -1)
+        decoded_info_gold = [""] * len(gold_corners)
+
+        if ret is True:
+            if show_detected:
+                for corner in corners:
+                    cv.line(image, corner[0].astype(np.int32), corner[1].astype(np.int32), (127, 127, 127), 6)
+                    cv.line(image, corner[1].astype(np.int32), corner[2].astype(np.int32), (127, 127, 127), 6)
+                    cv.line(image, corner[2].astype(np.int32), corner[3].astype(np.int32), (127, 127, 127), 6)
+                    cv.line(image, corner[3].astype(np.int32), corner[0].astype(np.int32), (127, 127, 127), 6)
+                if min(image.shape) > 1080:
+                    image = cv.resize(image, None, fx=0.5, fy=0.5)
+                cv.imshow("qr", image)
+                cv.waitKey(0)
+
+            for i, gold_corner in enumerate(gold_corners):
+                for j, corner in enumerate(corners):
+                    distance = get_norm_to_rotate_qr(gold_corner, corner, accuracy, metric)
+                    if distance < nearest_distance_from_gold[i]:
+                        nearest_distance_from_gold[i] = distance
+                        nearest_id_from_gold[i] = j
+            for i, detected_id in enumerate(nearest_id_from_gold):
+                decoded_info_gold[i] = decoded_info[detected_id]
+        return nearest_distance_from_gold, decoded_info_gold
+
 
 class CvObjDetector(DetectorQR):
     def __init__(self):
@@ -36,17 +122,23 @@ class CvObjDetector(DetectorQR):
         self.detector = cv.QRCodeDetector()
 
     def detect(self, image):
-            _, decoded_info, corners, _ = self.detector.detectAndDecodeMulti(image)
-            if corners is None or len(corners) == 0:
-                return False, np.array([])
-            self.decoded_info = decoded_info
-            self.detected_corners = corners
-            return True, corners
+        _, decoded_info, corners, _ = self.detector.detectAndDecodeMulti(image)
+        if corners is None or len(corners) == 0:
+            return False, np.array([])
+        self.decoded_info = decoded_info
+        self.detected_corners = corners
+        return True, corners
 
     def decode(self, image):
         if len(self.decoded_info) == 0:
             return 0, [], None
         return True, self.decoded_info, self.detected_corners
+
+    def detect_and_decode(self, image):
+        ret, decoded_info, corners, _ = self.detector.detectAndDecodeMulti(image)
+        self.decoded_info = decoded_info
+        self.detected_corners = corners
+        return ret, decoded_info, corners
 
 
 class CvArucoDetector(CvObjDetector):
@@ -62,6 +154,15 @@ class CvWechatDetector(DetectorQR):
                                                       path_to_model + "detect.caffemodel",
                                                       path_to_model + "sr.prototxt",
                                                       path_to_model + "sr.caffemodel")
+
+    def detect_and_decode(self, image):
+        decoded_info, corners = self.detector.detectAndDecode(image)
+        if corners is None or len(corners) == 0:
+            return False, [], []
+        corners = np.array(corners).reshape(-1, 4, 2)
+        self.decoded_info = decoded_info
+        self.detected_corners = corners
+        return True, decoded_info, corners
 
     def detect(self, image):
         decoded_info, corners = self.detector.detectAndDecode(image)
@@ -106,60 +207,85 @@ def get_gold_corners(label_path):
     return np.array(corners).reshape(-1, 4, 2)
 
 
-# l_1 - https://en.wikipedia.org/wiki/Norm_(mathematics)
-# l_inf - Chebyshev norm https://en.wikipedia.org/wiki/Chebyshev_distance
-TypeNorm = Enum('TypeNorm', 'l1 l2 l_inf intersection_over_union')
+def get_time():
+    return datetime.datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
 
 
-def get_norm(gold_corners, corners, type_dist):
-    if type_dist is TypeNorm.l1:
-        return LA.norm((gold_corners - corners).flatten(), 1)
-    if type_dist is TypeNorm.l2 or type_dist is TypeNorm.intersection_over_union:
-        return LA.norm((gold_corners - corners).flatten(), 2)
-    if type_dist is TypeNorm.l_inf:
-        return LA.norm((gold_corners - corners).flatten(), np.inf)
-    raise TypeError("this TypeNorm isn't supported")
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)
 
 
-def get_norm_to_rotate_qr(gold_corner, corners, accuracy, type_dist=TypeNorm.l_inf):
-    corners = corners.reshape(-1, 4, 2)
-    dist = 1e9
-    best_id = 0
-    cur_id = 0
-    for one_corners in corners:
-        prev_dist = dist
-        dist = min(dist, get_norm(gold_corner, one_corners, type_dist))
-        for i in range(0, 3):
-            one_corners = np.roll(one_corners, 1, 0)
-            dist = min(dist, get_norm(gold_corner, one_corners, type_dist))
-        one_corners = np.flip(one_corners, 0)
-        dist = min(dist, get_norm(gold_corner, one_corners, type_dist))
-        for i in range(0, 3):
-            one_corners = np.roll(one_corners, 1, 0)
-            dist = min(dist, get_norm(gold_corner, one_corners, type_dist))
-        if dist < prev_dist:
-            best_id = cur_id
-        cur_id += 1
+def set_plt():
+    # Turn interactive plotting off
+    plt.ioff()
+    plt.rcParams["figure.figsize"] = (15, 9)
+    plt.rcParams["figure.subplot.bottom"] = 0.3
+    plt.rcParams["figure.subplot.left"] = 0.05
+    plt.rcParams["figure.subplot.right"] = 0.99
 
-    if type_dist is TypeNorm.intersection_over_union:
-        rect = cv.boundingRect(np.concatenate((gold_corner, corners[best_id]), dtype=np.float32))
-        mask1 = np.zeros((rect[2], rect[3]), dtype=np.uint8)
-        mask1 = cv.fillConvexPoly(mask1, gold_corner.astype(np.int32) - (rect[0], rect[1]), 255)
-        mask2 = np.zeros((rect[2], rect[3]), dtype=np.uint8)
-        mask2 = cv.fillConvexPoly(mask2, corners[best_id].astype(np.int32) - (rect[0], rect[1]), 255)
-        a = cv.countNonZero(cv.bitwise_and(mask2, mask1))
-        b = max(cv.countNonZero(cv.bitwise_or(mask2, mask1)), 1)
-        dist = 1. - a / b
-    return dist, best_id
+
+def get_and_print_category_statistic(obj_type, category, statistics, accuracy, path):
+    objs = np.array(list(deepflatten(statistics)))
+    detected = objs[objs < accuracy]
+    category_statistic = OrderedDict(
+        [("category", category), ("detected " + obj_type, len(detected) / max(1, len(objs))),
+         ("total detected " + obj_type, len(detected)), ("total " + obj_type, len(objs)),
+         ("average detected error " + obj_type, np.mean(detected))])
+    data_frame = pd.DataFrame(objs)
+    data_frame.hist(bins=500)
+    plt.title(category + ' ' + obj_type)
+    plt.xlabel('error')
+    plt.xticks(np.arange(0., float(accuracy) + .25, .25))
+    plt.ylabel('frequency')
+    # plt.show()
+    plt.savefig(path + '/' + category + '_' + obj_type + '.jpg')
+    plt.close()
+    return category_statistic
+
+
+def print_statistics(distances, accuracy, output_path, per_image_statistic):
+    filename = "report_" + get_time()
+    with open(output_path + "/" + filename + '.json', 'w') as fp:
+        json.dump(distances, fp, cls=NumpyEncoder)
+    output_dict = output_path + '/' + filename
+    os.mkdir(output_dict)
+    result = []
+    set_plt()
+    for obj_type, statistics in distances.items():
+        for category, image_names, category_statistics in zip(statistics[0], statistics[1], statistics[2]):
+            result.append(
+                get_and_print_category_statistic(obj_type, category, category_statistics, accuracy, output_dict))
+            if not per_image_statistic:
+                continue
+            if not os.path.exists(output_dict + '/' + category):
+                os.mkdir(output_dict + '/' + category)
+            for image_name, image_statistics in zip(image_names, category_statistics):
+                data_frame = pd.DataFrame({"error": image_statistics})
+                data_frame.plot.bar(y='error')
+                plt.xlabel('id')
+                plt.ylabel('error')
+                plt.savefig(output_dict + '/' + category + '/' + obj_type + '_' + image_name + '.jpg')
+                plt.close()
+        result.append(get_and_print_category_statistic(obj_type, 'all', statistics[2], accuracy, output_dict))
+    if len(result) > 0:
+        data_frame = pd.DataFrame(result, columns=result[0].keys()).groupby('category', as_index=False,
+                                                                            sort=True).last()
+        print(data_frame.to_string(index=False))
+    else:
+        print("no data found, use --configuration=generate_run or --configuration=generate")
 
 
 def main():
     # parse command line options
     parser = argparse.ArgumentParser(description="bench QR code dataset", add_help=False)
     parser.add_argument("-H", "--help", help="show help", action="store_true", dest="show_help")
-    parser.add_argument("-o", "--output", help="output file", default="out.yaml", action="store", dest="output")
+    parser.add_argument("-o", "--output", help="output path", default="output", action="store", dest="output")
     parser.add_argument("-p", "--path", help="input dataset path", default="qrcodes/detection", action="store",
                         dest="dataset_path")
+    parser.add_argument("--per_image_statistic", help="print the per image statistic", action="store_true")
     parser.add_argument("-m", "--model", help="path to opencv_wechat model (detect.prototxt, detect.caffemodel,"
                                               "sr.prototxt, sr.caffemodel), build opencv+contrib to get model",
                         default="./", action="store",
@@ -190,96 +316,35 @@ def main():
         metric = TypeNorm.intersection_over_union
 
     list_dirs = glob.glob(dataset_path + "/*")
-    fs = cv.FileStorage(output, cv.FILE_STORAGE_WRITE)
-    detect_dict = {}
-    decode_dict = {}
-    fs.write("dataset_path", dataset_path)
-    gl_count = 0
-    gl_detect = 0
-    gl_decode = 0
-    gl_dist = 0
-    gl_pos_dist = 0
+
     qr = create_instance_qr(DetectorQR.TypeDetector[algorithm], model_path)
-    for dir in list_dirs:
-        imgs_path = find_images_path(dir)
-        qr_count = 0
-        qr_detect = 0
-        qr_decode = 0
-        category_dist = 0
-        category_pos_dist = 0
-        for img_path in imgs_path:
+    error_by_categories = {}
+    for directory in list_dirs:
+        if directory.split('/')[-1].split('\\')[-1].split('_')[0] == "report":
+            continue
+        distances = {"qr": [[], []]}
+        category = directory.split('/')[-1].split('\\')[-1]
+        category = '_' + category if category[0] != '_' else category
+        images_path = find_images_path(directory)
+        for img_path in images_path:
             label_path = img_path[:-3] + "txt"
             gold_corners = get_gold_corners(label_path)
-            qr_count += gold_corners.shape[0]
             image = cv.imread(img_path, cv.IMREAD_IGNORE_ORIENTATION)
+            img_name = img_path[:-4].replace('\\', '_').replace('/', '_')
 
-            ret, corners = qr.detect(image)
-            img_name = img_path[:-4].replace('\\', '_')
-            img_name = "img_" + img_name.replace('/', '_')
-            fs.startWriteStruct(img_name, cv.FILE_NODE_MAP)
-            fs.write("bool", int(ret))
-            fs.write("gold_corners", gold_corners)
-            fs.write("corners", corners)
-            local_image_dist = 0.
-            if ret is True:
-                i = 0
-                r, decoded_info, straight_qrcode = qr.decode(image)
-                decoded_corners = []
-                if len(decoded_info) > 0:
-                    for info in decoded_info:
-                        if info != "":
-                            qr_decode += 1
-                    for i in range(corners.shape[0]):
-                        decoded_corners.append(corners[i])
-                decoded_corners = np.array(decoded_corners)
-                fs.write("decoded_info", decoded_info)
-                for corner, decoded_info in zip(decoded_corners, decoded_info):
-                    dist, best_id = get_norm_to_rotate_qr(corner, gold_corners, accuracy, metric)
-                    gl_dist += dist
-                    category_dist += dist
-                    local_image_dist += (1.-dist) if metric is TypeNorm.intersection_over_union else dist
-                    if dist <= accuracy:
-                        qr_detect += 1
-                    fs.write("dist_to_gold_corner_" + str(i), dist)
-                    i += 1
-                    if decoded_info != "":
-                        gl_pos_dist += dist
-                        category_pos_dist += dist
-            fs.endWriteStruct()
-        category = (dir.replace('\\', '_')).replace('/', '_').split('_')[-1]
-        detect_dict[category] = {"nums": qr_count, "detected": qr_detect, "detected_prop": qr_detect / max(1, qr_count)}
-        decode_dict[category] = {"nums": qr_count, "decoded": qr_decode, "decoded_prop": qr_decode / max(1, qr_count)}
-        print(dir, qr_detect / max(1, qr_count), qr_decode / max(1, qr_count), qr_count)
-        print("category_dist", category_dist / max(1, qr_detect), " category_pos_dist", category_pos_dist / max(1, qr_decode))
-        gl_count += qr_count
-        gl_detect += qr_detect
-        gl_decode += qr_decode
-    print(gl_count)
-    print(gl_detect)
-    print(gl_decode)
-    print("gl_dist", gl_dist / max(1, gl_count), "gl_pos_dist", gl_pos_dist / max(1, gl_decode))
-    print("detect", gl_detect / max(1, gl_count))
-    print("decode", gl_decode / max(1, gl_count))
-    detect_dict["total"] = {"nums": gl_count, "detected": gl_detect, "detected_prop": gl_detect / max(1, gl_count)}
+            nearest_distance_from_gold, decoded, = qr.detect_and_check(image, gold_corners, accuracy, metric)
+            distance = {"qr": nearest_distance_from_gold}
+            for key, value in distance.items():
+                distances[key][0] += [img_name]
+                distances[key][1] += [value]
 
-    fs.startWriteStruct("category_detected", cv.FILE_NODE_MAP)
-    for category in detect_dict:
-        fs.startWriteStruct(category, cv.FILE_NODE_MAP)
-        fs.write("nums", detect_dict[category]["nums"])
-        fs.write("detected", detect_dict[category]["detected"])
-        fs.write("detected_prop", detect_dict[category]["detected_prop"])
-        fs.endWriteStruct()
-    fs.endWriteStruct()
-
-    decode_dict["total"] = {"nums": gl_count, "decoded": gl_decode, "decoded_prop": gl_decode / max(1, gl_count)}
-    fs.startWriteStruct("category_decoded", cv.FILE_NODE_MAP)
-    for category in decode_dict:
-        fs.startWriteStruct(category, cv.FILE_NODE_MAP)
-        fs.write("nums", decode_dict[category]["nums"])
-        fs.write("decoded", decode_dict[category]["decoded"])
-        fs.write("decoded_prop", decode_dict[category]["decoded_prop"])
-        fs.endWriteStruct()
-    fs.endWriteStruct()
+        for key, value in distances.items():
+            if key not in error_by_categories:
+                error_by_categories[key] = [[], [], []]
+            error_by_categories[key][0].append(category)
+            error_by_categories[key][1].append(value[0])
+            error_by_categories[key][2].append(value[1])
+    print_statistics(error_by_categories, accuracy, output, args.per_image_statistic)
 
 
 if __name__ == '__main__':
