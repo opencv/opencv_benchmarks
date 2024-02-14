@@ -285,6 +285,7 @@ def print_statistics(filename, distances, accuracy_threshold, output_path, per_i
         result.append(get_and_print_category_statistic(obj_type, 'all', statistics[2], accuracy_threshold, output_dict))
     if len(result) > 0:
         data_frame = pd.DataFrame(result).groupby('category', as_index=False, sort=True).last()
+        data_frame.to_csv(output_dict+"/statistics.csv", index=False, sep=';')
         print(data_frame.to_string(index=False))
     else:
         print("no data found, use --configuration=generate_run or --configuration=generate")
