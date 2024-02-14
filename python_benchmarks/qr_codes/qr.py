@@ -42,11 +42,11 @@ def get_max_error(accuracy_threshold, metric):
 
 def get_norm(gold_corner, corner, metric):
     if metric is TypeNorm.l1:
-        return LA.norm((gold_corner - corner).flatten(), 1)
+        return LA.norm((gold_corner - corner).flatten(), ord=1)
     if metric is TypeNorm.l2 or metric is TypeNorm.intersection_over_union:
-        return LA.norm((gold_corner - corner).flatten(), 2)
+        return LA.norm((gold_corner - corner).flatten(), ord=2)
     if metric is TypeNorm.l_inf:
-        return LA.norm((gold_corner - corner).flatten(), np.inf)
+        return LA.norm((gold_corner - corner).flatten(), ord=np.inf)
     raise TypeError("this TypeNorm isn't supported")
 
 
