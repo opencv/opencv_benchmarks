@@ -2,12 +2,12 @@
 
 """qr.py
 Usage example:
-python qr.py -o out.yaml -p qrcodes/detection
+python qr.py -o out -p qrcodes/detection
 -H, --help - show help
 -o, --output - output path
 -p, --path - input dataset path (default qrcodes/detection)
 --per_image_statistic - print the per image statistic
--a, --accuracy - input accuracy (default 20 pixels)
+-a, --accuracy_threshold - input accuracy_threshold (default 20 pixels)
 -alg, --algorithm - input alg (default opencv)
 --metric - input norm (default l_inf)
 """
@@ -32,9 +32,9 @@ from iteration_utilities import deepflatten
 TypeNorm = Enum('TypeNorm', 'l1 l2 l3 l_inf intersection_over_union')
 
 
-def get_max_error(accuracy, metric):
+def get_max_error(accuracy_threshold, metric):
     if metric is TypeNorm.l1 or metric is TypeNorm.l2 or metric is TypeNorm.l_inf:
-        return 2 * accuracy
+        return 2 * accuracy_threshold
     if metric is TypeNorm.intersection_over_union:
         return 1.
     raise TypeError("this TypeNorm isn't supported")
@@ -50,8 +50,8 @@ def get_norm(gold_corner, corner, metric):
     raise TypeError("this TypeNorm isn't supported")
 
 
-def get_norm_to_rotate_qr(gold_corner, corner, accuracy, metric):
-    dist = get_max_error(accuracy, metric)
+def get_norm_to_rotate_qr(gold_corner, corner, accuracy_threshold, metric):
+    dist = get_max_error(accuracy_threshold, metric)
 
     if metric is TypeNorm.intersection_over_union:
         rect = cv.boundingRect(np.concatenate((gold_corner, corner), dtype=np.float32))
@@ -86,10 +86,10 @@ class DetectorQR:
     def detect_and_decode(self, image):
         return False, self.decoded_info, self.detected_corners
 
-    def detect_and_check(self, image, gold_corners, accuracy, metric, show_detected=False):
+    def detect_and_check(self, image, gold_corners, accuracy_threshold, metric, show_detected=False):
         ret, decoded_info, corners = self.detect_and_decode(image)
 
-        nearest_distance_from_gold = np.full(len(gold_corners), get_max_error(accuracy, metric))
+        nearest_distance_from_gold = np.full(len(gold_corners), get_max_error(accuracy_threshold, metric))
         nearest_id_from_gold = np.full(len(gold_corners), -1)
         decoded_info_gold = [""] * len(gold_corners)
 
@@ -105,12 +105,12 @@ class DetectorQR:
                 cv.imshow("qr", image)
                 cv.waitKey(0)
 
-            nearest_gold_distance = np.full(len(corners), get_max_error(accuracy, metric))
+            nearest_gold_distance = np.full(len(corners), get_max_error(accuracy_threshold, metric))
             nearest_gold_id = np.full(len(corners), -1)
 
             for i, gold_corner in enumerate(gold_corners):
                 for j, corner in enumerate(corners):
-                    distance = get_norm_to_rotate_qr(gold_corner, corner, accuracy, metric)
+                    distance = get_norm_to_rotate_qr(gold_corner, corner, accuracy_threshold, metric)
                     if distance < nearest_distance_from_gold[i]:
                         nearest_distance_from_gold[i] = distance
                         nearest_id_from_gold[i] = j
@@ -234,7 +234,7 @@ def set_plt():
     plt.rcParams["figure.subplot.right"] = 0.99
 
 
-def get_and_print_category_statistic(obj_type, category, statistics, accuracy, path):
+def get_and_print_category_statistic(obj_type, category, statistics, accuracy_threshold, path):
     if obj_type == "decode":
         decoded_info = list(deepflatten(statistics, ignore=str))
         decoded = sum(1 for info in decoded_info if info != "")
@@ -242,7 +242,7 @@ def get_and_print_category_statistic(obj_type, category, statistics, accuracy, p
             [("category", category), ("decoded", decoded/len(decoded_info)), ("total decoded", decoded)])
         return category_statistic
     objs = np.array(list(deepflatten(statistics)))
-    detected = objs[objs < accuracy]
+    detected = objs[objs < accuracy_threshold]
     category_statistic = OrderedDict(
         [("category", category), ("detected " + obj_type, len(detected) / max(1, len(objs))),
          ("total detected " + obj_type, len(detected)), ("total " + obj_type, len(objs)),
@@ -251,7 +251,7 @@ def get_and_print_category_statistic(obj_type, category, statistics, accuracy, p
     data_frame.hist(bins=500)
     plt.title(category + ' ' + obj_type)
     plt.xlabel('error')
-    plt.xticks(np.arange(0., float(accuracy) + .25, .25))
+    plt.xticks(np.arange(0., float(accuracy_threshold) + .25, .25))
     plt.ylabel('frequency')
     # plt.show()
     plt.savefig(path + '/' + category + '_' + obj_type + '.jpg')
@@ -259,18 +259,18 @@ def get_and_print_category_statistic(obj_type, category, statistics, accuracy, p
     return category_statistic
 
 
-def print_statistics(distances, accuracy, output_path, per_image_statistic):
-    filename = "report_" + get_time()
-    with open(output_path + "/" + filename + '.json', 'w') as fp:
-        json.dump(distances, fp, cls=NumpyEncoder)
+def print_statistics(filename, distances, accuracy_threshold, output_path, per_image_statistic):
     output_dict = output_path + '/' + filename
-    os.mkdir(output_dict)
+    if not os.path.exists(output_dict):
+        os.mkdir(output_dict)
+    with open(output_dict + "/" + "distances" + '.json', 'w') as fp:
+        json.dump(distances, fp, cls=NumpyEncoder)
     result = []
     set_plt()
     for obj_type, statistics in distances.items():
         for category, image_names, category_statistics in zip(statistics[0], statistics[1], statistics[2]):
             result.append(
-                get_and_print_category_statistic(obj_type, category, category_statistics, accuracy, output_dict))
+                get_and_print_category_statistic(obj_type, category, category_statistics, accuracy_threshold, output_dict))
             if not per_image_statistic:
                 continue
             if not os.path.exists(output_dict + '/' + category):
@@ -282,12 +282,24 @@ def print_statistics(distances, accuracy, output_path, per_image_statistic):
                 plt.ylabel('error')
                 plt.savefig(output_dict + '/' + category + '/' + obj_type + '_' + image_name + '.jpg')
                 plt.close()
-        result.append(get_and_print_category_statistic(obj_type, 'all', statistics[2], accuracy, output_dict))
+        result.append(get_and_print_category_statistic(obj_type, 'all', statistics[2], accuracy_threshold, output_dict))
     if len(result) > 0:
         data_frame = pd.DataFrame(result).groupby('category', as_index=False, sort=True).last()
         print(data_frame.to_string(index=False))
     else:
         print("no data found, use --configuration=generate_run or --configuration=generate")
+
+
+def dump_log(filename, img_name, output, distances, decoded=""):
+    output_dict = output + '/' + filename
+    if not os.path.exists(output_dict):
+        os.mkdir(output_dict)
+    with open(output_dict+"/"+"log.txt", 'a', encoding="utf-8") as f:
+        f.write(img_name+":\n")
+        for distance, info in zip(distances, decoded):
+            f.write("decoded:" + info+'\n')
+            f.write("distance:" + str(distance)+'\n')
+        f.close()
 
 
 def main():
@@ -302,7 +314,7 @@ def main():
                                               "sr.prototxt, sr.caffemodel), build opencv+contrib to get model",
                         default="./", action="store",
                         dest="model_path")
-    parser.add_argument("-a", "--accuracy", help="input accuracy", default="20", action="store", dest="accuracy",
+    parser.add_argument("-a", "--accuracy_threshold", help="input accuracy_threshold", default="20", action="store", dest="accuracy_threshold",
                         type=float)
     parser.add_argument("-alg", "--algorithm", help="QR detect algorithm", default="opencv", action="store",
                         dest="algorithm", choices=['opencv', 'opencv_aruco', 'opencv_wechat'], type=str)
@@ -317,7 +329,7 @@ def main():
     output = args.output
     dataset_path = args.dataset_path
     model_path = args.model_path
-    accuracy = args.accuracy
+    accuracy_threshold = args.accuracy_threshold
     algorithm = args.algorithm
     metric = TypeNorm.l_inf
     if args.metric == "l1":
@@ -331,6 +343,7 @@ def main():
 
     qr = create_instance_qr(DetectorQR.TypeDetector[algorithm], model_path)
     error_by_categories = {}
+    filename = "report_" + get_time()
     for directory in list_dirs:
         if directory.split('/')[-1].split('\\')[-1].split('_')[0] == "report":
             continue
@@ -344,7 +357,8 @@ def main():
             image = cv.imread(img_path, cv.IMREAD_IGNORE_ORIENTATION)
             img_name = img_path[:-4].replace('\\', '_').replace('/', '_')
 
-            nearest_distance_from_gold, decoded, = qr.detect_and_check(image, gold_corners, accuracy, metric)
+            nearest_distance_from_gold, decoded, = qr.detect_and_check(image, gold_corners, accuracy_threshold, metric)
+            dump_log(filename, img_name, output, nearest_distance_from_gold, decoded)
             distance = {"qr": nearest_distance_from_gold, "decode": decoded}
             for key, value in distance.items():
                 distances[key][0] += [img_name]
@@ -356,10 +370,11 @@ def main():
             error_by_categories[key][0].append(category)
             error_by_categories[key][1].append(value[0])
             error_by_categories[key][2].append(value[1])
-    print_statistics(error_by_categories, accuracy, output, args.per_image_statistic)
+    print_statistics(filename, error_by_categories, accuracy_threshold, output, args.per_image_statistic)
 
 
 if __name__ == '__main__':
     start = time.time()
     main()
-    print(time.time() - start)
+    print("Total time:", time.time() - start, "sec")
+
