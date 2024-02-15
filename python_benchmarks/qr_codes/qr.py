@@ -34,7 +34,7 @@ TypeNorm = Enum('TypeNorm', 'l1 l2 l3 l_inf intersection_over_union')
 
 def get_max_error(accuracy_threshold, metric):
     if metric is TypeNorm.l1 or metric is TypeNorm.l2 or metric is TypeNorm.l_inf:
-        return 2 * accuracy_threshold
+        return accuracy_threshold
     if metric is TypeNorm.intersection_over_union:
         return 1.
     raise TypeError("this TypeNorm isn't supported")
@@ -234,7 +234,7 @@ def set_plt():
     plt.rcParams["figure.subplot.right"] = 0.99
 
 
-def get_and_print_category_statistic(obj_type, category, statistics, accuracy_threshold, path):
+def get_and_print_category_statistic(obj_type, category, statistics, accuracy_threshold, metric, path):
     if obj_type == "decode":
         decoded_info = list(deepflatten(statistics, ignore=str))
         decoded = sum(1 for info in decoded_info if info != "")
@@ -251,7 +251,8 @@ def get_and_print_category_statistic(obj_type, category, statistics, accuracy_th
     data_frame.hist(bins=500)
     plt.title(category + ' ' + obj_type)
     plt.xlabel('error')
-    plt.xticks(np.arange(0., float(accuracy_threshold) + .25, .25))
+    max_error = get_max_error(accuracy_threshold, metric)
+    plt.xticks(np.arange(0., max_error + .25, max_error / 10.))
     plt.ylabel('frequency')
     # plt.show()
     plt.savefig(path + '/' + category + '_' + obj_type + '.jpg')
@@ -259,18 +260,19 @@ def get_and_print_category_statistic(obj_type, category, statistics, accuracy_th
     return category_statistic
 
 
-def print_statistics(filename, distances, accuracy_threshold, output_path, per_image_statistic):
+def print_statistics(filename, distances, accuracy_threshold, metric, output_path, per_image_statistic):
     output_dict = output_path + '/' + filename
     if not os.path.exists(output_dict):
         os.mkdir(output_dict)
     with open(output_dict + "/" + "distances" + '.json', 'w') as fp:
-        json.dump(distances, fp, cls=NumpyEncoder)
+        json.dump(distances, fp, cls=NumpyEncoder, indent=4)
     result = []
     set_plt()
     for obj_type, statistics in distances.items():
         for category, image_names, category_statistics in zip(statistics[0], statistics[1], statistics[2]):
             result.append(
-                get_and_print_category_statistic(obj_type, category, category_statistics, accuracy_threshold, output_dict))
+                get_and_print_category_statistic(obj_type, category, category_statistics, accuracy_threshold, metric,
+                                                 output_dict))
             if not per_image_statistic:
                 continue
             if not os.path.exists(output_dict + '/' + category):
@@ -282,7 +284,8 @@ def print_statistics(filename, distances, accuracy_threshold, output_path, per_i
                 plt.ylabel('error')
                 plt.savefig(output_dict + '/' + category + '/' + obj_type + '_' + image_name + '.jpg')
                 plt.close()
-        result.append(get_and_print_category_statistic(obj_type, 'all', statistics[2], accuracy_threshold, output_dict))
+        result.append(get_and_print_category_statistic(obj_type, 'all', statistics[2], accuracy_threshold, metric,
+                                                       output_dict))
     if len(result) > 0:
         data_frame = pd.DataFrame(result).groupby('category', as_index=False, sort=True).last()
         data_frame.to_csv(output_dict+"/statistics.csv", index=False, sep=';')
@@ -293,6 +296,8 @@ def print_statistics(filename, distances, accuracy_threshold, output_path, per_i
 
 def dump_log(filename, img_name, output, distances, decoded=""):
     output_dict = output + '/' + filename
+    if not os.path.exists(output):
+        os.mkdir(output)
     if not os.path.exists(output_dict):
         os.mkdir(output_dict)
     with open(output_dict+"/"+"log.txt", 'a', encoding="utf-8") as f:
@@ -307,7 +312,7 @@ def main():
     # parse command line options
     parser = argparse.ArgumentParser(description="bench QR code dataset", add_help=False)
     parser.add_argument("-H", "--help", help="show help", action="store_true", dest="show_help")
-    parser.add_argument("-o", "--output", help="output path", default="output", action="store", dest="output")
+    parser.add_argument("-o", "--output", help="output path", default="", action="store", dest="output")
     parser.add_argument("-p", "--path", help="input dataset path", default="qrcodes/detection", action="store",
                         dest="dataset_path")
     parser.add_argument("--per_image_statistic", help="print the per image statistic", action="store_true")
@@ -327,7 +332,7 @@ def main():
     if show_help:
         parser.print_help()
         return
-    output = args.output
+    output = "." if args.output == "" else args.output
     dataset_path = args.dataset_path
     model_path = args.model_path
     accuracy_threshold = args.accuracy_threshold
@@ -371,7 +376,7 @@ def main():
             error_by_categories[key][0].append(category)
             error_by_categories[key][1].append(value[0])
             error_by_categories[key][2].append(value[1])
-    print_statistics(filename, error_by_categories, accuracy_threshold, output, args.per_image_statistic)
+    print_statistics(filename, error_by_categories, accuracy_threshold, metric, output, args.per_image_statistic)
 
 
 if __name__ == '__main__':
