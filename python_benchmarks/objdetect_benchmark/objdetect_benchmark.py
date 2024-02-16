@@ -6,7 +6,7 @@ python objdetect_benchmark.py -p path
 -H, --help - show help
 --configuration - script launch configuration (default generate_run)
 -p, --path - path to the input/output of the dataset or detect statistics
--a, --accuracy - input accuracy, this is the object detection threshold (default 10 pixels)
+-a, --accuracy_threshold - input accuracy_threshold, this is the object detection threshold (default 10 pixels)
 --metric - input norm (default l_inf)
 --marker_length_rate square marker length rate for charuco (default 0.5)
 --board_x - input board x size (default 6)
@@ -15,6 +15,7 @@ python objdetect_benchmark.py -p path
 --rel_center_y - relative y-axis location of the center of the board in the image (default 0.5)
 --synthetic_object - type of synthetic object: aruco or charuco or chessboard (default charuco)
 --radius_rate - circles_radius = cell_img_size/radius_rate (default 5.0)
+--seed - seed for generate dataset (default 0)
 """
 
 import argparse
@@ -41,17 +42,17 @@ TypeNorm = Enum('TypeNorm', 'l1 l2 l_inf intersection_over_union')
 
 def get_norm(gold_corners, corners, type_dist):
     if type_dist is TypeNorm.l1:
-        return LA.norm((gold_corners - corners).flatten(), 1)
+        return LA.norm((gold_corners - corners).flatten(), ord=1)
     if type_dist is TypeNorm.l2 or type_dist is TypeNorm.intersection_over_union:
-        return LA.norm((gold_corners - corners).flatten(), 2)
+        return LA.norm((gold_corners - corners).flatten(), ord=2)
     if type_dist is TypeNorm.l_inf:
-        return LA.norm((gold_corners - corners).flatten(), np.inf)
+        return LA.norm((gold_corners - corners).flatten(), ord=np.inf)
     raise TypeError("this TypeNorm isn't supported")
 
 
-def get_max_error(accuracy, type_dist):
+def get_max_error(accuracy_threshold, type_dist):
     if type_dist is TypeNorm.l1 or TypeNorm.l2 or TypeNorm.l3 or TypeNorm.l_inf:
-        return accuracy
+        return accuracy_threshold
     if type_dist is TypeNorm.intersection_over_union:
         return 1
     raise TypeError("this TypeNorm isn't supported")
@@ -351,9 +352,9 @@ def set_plt():
     plt.rcParams["figure.subplot.right"] = 0.99
 
 
-def get_and_print_category_statistic(obj_type, category, statistics, accuracy, path):
+def get_and_print_category_statistic(obj_type, category, statistics, accuracy_threshold, metric, path):
     objs = np.array(list(deepflatten(statistics)))
-    detected = objs[objs < accuracy]
+    detected = objs[objs < accuracy_threshold]
     category_statistic = OrderedDict(
         [("category", category), ("detected " + obj_type, len(detected) / max(1, len(objs))),
          ("total detected " + obj_type, len(detected)), ("total " + obj_type, len(objs)),
@@ -362,7 +363,8 @@ def get_and_print_category_statistic(obj_type, category, statistics, accuracy, p
     data_frame.hist(bins=500)
     plt.title(category + ' ' + obj_type)
     plt.xlabel('error')
-    plt.xticks(np.arange(0., float(accuracy)+.25, .25))
+    max_error = get_max_error(accuracy_threshold, metric)
+    plt.xticks(np.arange(0., max_error + .25, max_error / 10.))
     plt.ylabel('frequency')
     # plt.show()
     plt.savefig(path + '/' + category + '_' + obj_type + '.jpg')
@@ -374,17 +376,18 @@ def get_time():
     return datetime.datetime.now().strftime("%Y_%m_%d-%I_%M_%S_%p")
 
 
-def print_statistics(distances, accuracy, output_path, per_image_statistic):
-    filename = "report_" + get_time()
-    with open(output_path + "/" + filename + '.json', 'w') as fp:
-        json.dump(distances, fp, cls=NumpyEncoder)
-    output_dict = output_path + '/' + filename
-    os.mkdir(output_dict)
+def print_statistics(folder_name, distances, accuracy_threshold, metric, output_path, per_image_statistic):
+    output_dict = output_path + '/' + folder_name
+    if not os.path.exists(output_dict):
+        os.mkdir(output_dict)
+    with open(output_dict + "/" + "distances" + '.json', 'w') as fp:
+        json.dump(distances, fp, cls=NumpyEncoder, indent=4)
     result = []
     set_plt()
     for obj_type, statistics in distances.items():
         for category, image_names, category_statistics in zip(statistics[0], statistics[1], statistics[2]):
-            result.append(get_and_print_category_statistic(obj_type, category, category_statistics, accuracy, output_dict))
+            result.append(get_and_print_category_statistic(obj_type, category, category_statistics, accuracy_threshold,
+                                                           metric, output_dict))
             if not per_image_statistic:
                 continue
             if not os.path.exists(output_dict + '/' + category):
@@ -396,9 +399,10 @@ def print_statistics(distances, accuracy, output_path, per_image_statistic):
                 plt.ylabel('error')
                 plt.savefig(output_dict + '/' + category + '/' + obj_type + '_' + image_name + '.jpg')
                 plt.close()
-        result.append(get_and_print_category_statistic(obj_type, 'all', statistics[2], accuracy, output_dict))
+        result.append(get_and_print_category_statistic(obj_type, 'all', statistics[2], accuracy_threshold, metric, output_dict))
     if len(result) > 0:
-        data_frame = pd.DataFrame(result, columns=result[0].keys()).groupby('category', as_index=False, sort=True).last()
+        data_frame = pd.DataFrame(result).groupby('category', as_index=False, sort=True).last()
+        data_frame.to_csv(output_dict + "/statistics.csv", index=False, sep=';')
         print(data_frame.to_string(index=False))
         print("total_time: ", total_time)
     else:
@@ -413,8 +417,8 @@ def read_distances(filename):
 
 
 class Checker:
-    def __init__(self, accuracy, type_dist, path):
-        self.accuracy = accuracy
+    def __init__(self, accuracy_threshold, type_dist, path):
+        self.accuracy_threshold = accuracy_threshold
         self.type_dist = type_dist
         self.path = path
 
@@ -424,8 +428,8 @@ class Checker:
 
 
 class ArucoChecker(Checker):
-    def __init__(self, accuracy, type_dist, path, read_params=True):
-        super().__init__(accuracy, type_dist, path)
+    def __init__(self, accuracy_threshold, type_dist, path, read_params=True):
+        super().__init__(accuracy_threshold, type_dist, path)
         self.aruco_params = cv.aruco.DetectorParameters()
         ArucoChecker.update_aruco_params(self.aruco_params, path, read_params)
 
@@ -445,7 +449,7 @@ class ArucoChecker(Checker):
         return ["aruco"]
 
     @staticmethod
-    def check_aruco(synthetic_aruco, marker_corners, marker_ids, accuracy, type_dist):
+    def check_aruco(synthetic_aruco, marker_corners, marker_ids, accuracy_threshold, type_dist):
         gold = {}
         gold_corners, gold_ids = synthetic_aruco.aruco_corners.reshape(-1, 4, 2), synthetic_aruco.aruco_ids
         for marker_id, marker in zip(gold_ids, gold_corners):
@@ -454,7 +458,7 @@ class ArucoChecker(Checker):
         if marker_ids is not None and len(marker_ids) > 0:
             for marker_id, marker in zip(marker_ids, marker_corners):
                 detected[int(marker_id)] = marker.reshape(4, 2)
-        max_error = get_max_error(accuracy, type_dist)
+        max_error = get_max_error(accuracy_threshold, type_dist)
         distances = np.full(len(gold_ids), max_error)
         for i, gold_id in enumerate(gold_ids):
             gold_corner = gold_corners[int(gold_id)]
@@ -469,7 +473,7 @@ class ArucoChecker(Checker):
         start = datetime.datetime.now()
         marker_corners, marker_ids, _ = aruco_detector.detectMarkers(synthetic_aruco.image)
         total_time += (datetime.datetime.now() - start).total_seconds()
-        ar_dist = ArucoChecker.check_aruco(synthetic_aruco, marker_corners, marker_ids, self.accuracy, self.type_dist)
+        ar_dist = ArucoChecker.check_aruco(synthetic_aruco, marker_corners, marker_ids, self.accuracy_threshold, self.type_dist)
         return {self.get_obj_names()[0]: ar_dist}
 
 
@@ -531,8 +535,8 @@ class SyntheticCharuco(SyntheticObject):
 
 
 class CharucoChecker(Checker):
-    def __init__(self, accuracy, type_dist, path="", read_params=True):
-        super().__init__(accuracy, type_dist, path)
+    def __init__(self, accuracy_threshold, type_dist, path="", read_params=True):
+        super().__init__(accuracy_threshold, type_dist, path)
         self.aruco_params = cv.aruco.DetectorParameters()
         ArucoChecker.update_aruco_params(self.aruco_params, path, read_params)
 
@@ -549,7 +553,7 @@ class CharucoChecker(Checker):
         if charuco_ids is not None and len(charuco_ids) > 0:
             for charuco_id, charuco_corner in zip(charuco_ids, charuco_corners):
                 detected[int(charuco_id)] = charuco_corner
-        max_error = get_max_error(self.accuracy, self.type_dist)
+        max_error = get_max_error(self.accuracy_threshold, self.type_dist)
         total_count = len(gold_corners)
         distances = np.full(total_count, max_error)
         for i, gold_id in enumerate(range(total_count)):
@@ -566,7 +570,7 @@ class CharucoChecker(Checker):
         start = datetime.datetime.now()
         charuco_corners, charuco_ids, marker_corners, marker_ids = charuco_detector.detectBoard(synthetic_charuco.image)
         total_time += (datetime.datetime.now() - start).total_seconds()
-        ar_dist = ArucoChecker.check_aruco(synthetic_charuco, marker_corners, marker_ids, self.accuracy, self.type_dist)
+        ar_dist = ArucoChecker.check_aruco(synthetic_charuco, marker_corners, marker_ids, self.accuracy_threshold, self.type_dist)
 
         ch_dist = self._check_charuco(synthetic_charuco, charuco_corners, charuco_ids)
         return {self.get_obj_names()[0]: ar_dist, self.get_obj_names()[1]: ch_dist}
@@ -624,7 +628,7 @@ class ChessboardChecker(Checker):
     def __check_chessboard(self, synthetic_chessboard, corners):
         gold = {}
         gold_corners = synthetic_chessboard.chessboard_corners.reshape(-1, 2)
-        max_error = get_max_error(self.accuracy, self.type_dist)
+        max_error = get_max_error(self.accuracy_threshold, self.type_dist)
         total_count = len(gold_corners)
         distances = np.full(total_count, max_error)
         if corners is not None:
@@ -721,7 +725,7 @@ class CircleGridChecker(Checker):
     def __check_circle_board(self, synthetic_circle_board, circle_centers):
         gold = {}
         gold_corners = synthetic_circle_board.circle_centers.reshape(-1, 2)
-        max_error = get_max_error(self.accuracy, self.type_dist)
+        max_error = get_max_error(self.accuracy_threshold, self.type_dist)
         total_count = len(gold_corners)
         distances = np.full(total_count, max_error)
         if circle_centers is not None:
@@ -802,8 +806,8 @@ def main():
     parser.add_argument("-d1", help="d1", default="", action="store", dest="d1")
     parser.add_argument("-d2", help="d2", default="", action="store", dest="d2")
     parser.add_argument("--per_image_statistic", help="print the per image statistic", action="store_true")
-    parser.add_argument("-a", "--accuracy", help="input accuracy", default="10", action="store", dest="accuracy",
-                        type=float)
+    parser.add_argument("-a", "--accuracy_threshold", help="input accuracy_threshold", default="10", action="store",
+                        dest="accuracy_threshold", type=float)
     parser.add_argument("--marker_length_rate", help="square marker length rate for charuco", default=".5",
                         action="store", dest="marker_length_rate", type=float)
     parser.add_argument("--cell_img_size", help="the size of one board cell in the image in pixels", default="100",
@@ -821,17 +825,20 @@ def main():
                                                           'circle_asym_grid'], type=str)
     parser.add_argument("--radius_rate", help="circles_radius = cell_img_size/radius_rate (default 5.0)",
                         default="5.", action="store", dest="radius_rate", type=float)
+    parser.add_argument("--seed", help="seed for generate dataset", default="0", action="store", dest="seed", type=int)
 
     args = parser.parse_args()
     show_help = args.show_help
     if show_help:
         parser.print_help()
         return
+    args.dataset_path = "." if args.dataset_path == "" else args.dataset_path
+    np.random.seed(args.seed)
 
     dataset_path = args.dataset_path
     if not os.path.exists(dataset_path):
         os.mkdir(dataset_path)
-    accuracy = args.accuracy
+    accuracy_threshold = args.accuracy_threshold
     metric = TypeNorm.l_inf
     if args.metric == "l1":
         metric = TypeNorm.l1
@@ -846,26 +853,27 @@ def main():
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticCharuco(board_size=board_size, cell_img_size=cell_img_size,
                                             square_marker_length_rate=args.marker_length_rate)
-        checker = CharucoChecker(accuracy, metric, dataset_path)
+        checker = CharucoChecker(accuracy_threshold, metric, dataset_path)
     elif args.synthetic_object == "aruco":
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticAruco(board_size=board_size, cell_img_size=cell_img_size,
                                           marker_separation=args.marker_length_rate)
-        checker = ArucoChecker(accuracy, metric, dataset_path)
+        checker = ArucoChecker(accuracy_threshold, metric, dataset_path)
     elif args.synthetic_object == "chessboard":
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticChessboard(board_size=board_size, cell_img_size=cell_img_size)
-        checker = ChessboardChecker(accuracy, metric, dataset_path)
+        checker = ChessboardChecker(accuracy_threshold, metric, dataset_path)
     elif args.synthetic_object == "circle_sym_grid" or args.synthetic_object == 'circle_asym_grid':
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticCircleGrid(board_size=board_size, cell_img_size=cell_img_size,
                                                circle_radius=round(cell_img_size/args.radius_rate),
                                                grid_type=args.synthetic_object)
-        checker = CircleGridChecker(accuracy, metric, dataset_path)
+        checker = CircleGridChecker(accuracy_threshold, metric, dataset_path)
     else:
         synthetic_object = None
         raise TypeError("unknown synthetic_object: " + args.synthetic_object)
 
+    folder_name = "report_" + get_time()
     configuration = args.configuration
     if configuration == "generate" or configuration == "generate_run":
         generate_dataset(args, synthetic_object)
@@ -882,10 +890,10 @@ def main():
                         for j, image in enumerate(category):
                             for k, corner in enumerate(image):
                                 distances3[key][2][i][j][k] = corner - distances2[key][2][i][j][k]
-        print_statistics(distances3, accuracy, dataset_path, args.per_image_statistic)
+        print_statistics(folder_name, distances3, accuracy_threshold, metric, dataset_path, args.per_image_statistic)
         return
 
-    print("distance threshold:", checker.accuracy, "\n")
+    print("distance threshold:", checker.accuracy_threshold, "\n")
 
     list_folders = next(os.walk(dataset_path))[1]
     error_by_categories = {}
@@ -910,7 +918,8 @@ def main():
             error_by_categories[key][0].append(folder)
             error_by_categories[key][1].append(value[0])
             error_by_categories[key][2].append(value[1])
-    print_statistics(error_by_categories, accuracy, dataset_path, args.per_image_statistic)
+    print_statistics(folder_name, error_by_categories, accuracy_threshold, metric, dataset_path,
+                     args.per_image_statistic)
 
 
 if __name__ == '__main__':
