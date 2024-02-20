@@ -15,6 +15,7 @@ python objdetect_benchmark.py -p path
 --rel_center_y - relative y-axis location of the center of the board in the image (default 0.5)
 --synthetic_object - type of synthetic object: aruco or charuco or chessboard (default charuco)
 --radius_rate - circles_radius = cell_img_size/radius_rate (default 5.0)
+--dict_id - The id of the ArUco marker dictionary (default 0)
 --seed - seed for generate dataset (default 0)
 """
 
@@ -295,7 +296,7 @@ class SyntheticAruco(SyntheticObject):
             board_image_size[i] = round(board_image_size[i])
         return board_image_size, pix
 
-    def __init__(self, *, board_size, cell_img_size, marker_separation=0.5, dict_id=0):
+    def __init__(self, *, board_size, cell_img_size, marker_separation, dict_id):
         self.board_size = board_size
         self.marker_separation = marker_separation
         self.dict_id = dict_id
@@ -478,7 +479,7 @@ class ArucoChecker(Checker):
 
 
 class SyntheticCharuco(SyntheticObject):
-    def __init__(self, *, board_size, cell_img_size, square_marker_length_rate=0.5, dict_id=0):
+    def __init__(self, *, board_size, cell_img_size, square_marker_length_rate, dict_id):
         self.board_size = board_size
         self.square_marker_length_rate = square_marker_length_rate
         self.dict_id = dict_id
@@ -758,8 +759,12 @@ class CircleGridChecker(Checker):
 
 def generate_dataset(args, synthetic_object, background_color=0):
     output = args.dataset_path
-    background = BackGroundObject(num_rows=synthetic_object.image.shape[0] * 2,
-                                  num_cols=synthetic_object.image.shape[1] * 2,
+    max_size = max(synthetic_object.image.shape[0], synthetic_object.image.shape[1])
+    # The size of SyntheticObject may increase after applying the transformation layers.
+    # To fit the template into the image, we added a background. The size of this background was chosen experimentally.
+    background_scaling = 1.7
+    background = BackGroundObject(num_rows=int(max_size * background_scaling),
+                                  num_cols=int(max_size * background_scaling),
                                   color=background_color)
     rel_center_x, rel_center_y = args.rel_center_x, args.rel_center_y
     pasting_object = PastingTransform(background_object=background, rel_center=(rel_center_y, rel_center_x))
@@ -825,6 +830,8 @@ def main():
                                                           'circle_asym_grid'], type=str)
     parser.add_argument("--radius_rate", help="circles_radius = cell_img_size/radius_rate (default 5.0)",
                         default="5.", action="store", dest="radius_rate", type=float)
+    parser.add_argument("--dict_id", help="The id of the ArUco marker dictionary (default 0)",
+                        default=0, action="store", dest="dict_id", type=int)
     parser.add_argument("--seed", help="seed for generate dataset", default="0", action="store", dest="seed", type=int)
 
     args = parser.parse_args()
@@ -852,12 +859,12 @@ def main():
     if args.synthetic_object == "charuco":
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticCharuco(board_size=board_size, cell_img_size=cell_img_size,
-                                            square_marker_length_rate=args.marker_length_rate)
+                                            square_marker_length_rate=args.marker_length_rate, dict_id=args.dict_id)
         checker = CharucoChecker(accuracy_threshold, metric, dataset_path)
     elif args.synthetic_object == "aruco":
         board_size = [args.board_x, args.board_y]
         synthetic_object = SyntheticAruco(board_size=board_size, cell_img_size=cell_img_size,
-                                          marker_separation=args.marker_length_rate)
+                                          marker_separation=args.marker_length_rate, dict_id=args.dict_id)
         checker = ArucoChecker(accuracy_threshold, metric, dataset_path)
     elif args.synthetic_object == "chessboard":
         board_size = [args.board_x, args.board_y]
