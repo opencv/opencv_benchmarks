@@ -19,6 +19,7 @@ python objdetect_benchmark.py -p path
 --seed - seed for generate dataset (default 0)
 """
 
+import time
 import argparse
 from enum import Enum
 import numpy as np
@@ -94,11 +95,11 @@ class TransformObject:
 
 
 class PerspectiveTransform(TransformObject):
-    def __init__(self, *, img_size, yaw, pitch, distance=1.0):
+    def __init__(self, *, img_size, yaw, pitch, distance=1.0, name="perspective"):
         self.yaw = yaw
         self.pitch = pitch
         self.distance = distance
-        self.name = "perspective"
+        self.name = name
 
         rvec, tvec = get_synthetic_rt(yaw, pitch, distance)
         camera_matrix = np.zeros((3, 3), dtype=np.float64)
@@ -168,9 +169,9 @@ class RotateTransform(TransformObject):
 
 
 class BlurTransform(TransformObject):
-    def __init__(self, *, ksize=(5, 5)):
+    def __init__(self, *, ksize=(5, 5), name="blur"):
         self.ksize = ksize
-        self.name = "blur"
+        self.name = name
 
     def transform_image(self, image):
         return cv.blur(image, self.ksize)
@@ -405,7 +406,7 @@ def print_statistics(folder_name, distances, accuracy_threshold, metric, output_
         data_frame = pd.DataFrame(result).groupby('category', as_index=False, sort=True).last()
         data_frame.to_csv(output_dict + "/statistics.csv", index=False, sep=';')
         print(data_frame.to_string(index=False))
-        print("total_time: ", total_time)
+        print("Total detected time: ", total_time, "sec")
     else:
         print("no data found, use --configuration=generate_run or --configuration=generate")
 
@@ -773,15 +774,18 @@ def generate_dataset(args, synthetic_object, background_color=0):
 
     empty_t = TransformObject()
     blur_t = BlurTransform()
+    blur_strong = BlurTransform(ksize=(11, 11), name="strongBlur")
     gauss_noise_t = GaussNoiseTransform()
 
     perspective_t1 = PerspectiveTransform(img_size=synthetic_object.image.shape, yaw=0., pitch=0.5)
     perspective_t2 = PerspectiveTransform(img_size=synthetic_object.image.shape, yaw=0.5, pitch=0.)
     perspective_t3 = PerspectiveTransform(img_size=synthetic_object.image.shape, yaw=0.5, pitch=0.5)
+    perspective_t4 = PerspectiveTransform(img_size=synthetic_object.image.shape, yaw=1., pitch=0.5,
+                                          name="strongPerspective")
     undistort_t = UndistortFisheyeTransform(img_size=synthetic_object.image.shape)
-    transforms_list = [[perspective_t1, perspective_t2, perspective_t3, empty_t],
-                      [undistort_t, empty_t],
-                      [blur_t, gauss_noise_t, empty_t]]
+    transforms_list = [[perspective_t1, perspective_t2, perspective_t3, perspective_t4, empty_t],
+                       [undistort_t, empty_t],
+                       [blur_t, blur_strong, gauss_noise_t, empty_t]]
     transforms_comb = list(itertools.product(*transforms_list))
 
     dictionary = {}
@@ -930,5 +934,7 @@ def main():
 
 
 if __name__ == '__main__':
+    start = time.time()
     main()
+    print("Total benchmark time:", time.time() - start, "sec")
 
