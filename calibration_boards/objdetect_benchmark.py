@@ -45,8 +45,17 @@ TypeNorm = Enum('TypeNorm', 'l1 l2 l_inf intersection_over_union')
 def get_norm(gold_corners, corners, type_dist):
     if type_dist is TypeNorm.l1:
         return LA.norm((gold_corners - corners).flatten(), ord=1)
-    if type_dist is TypeNorm.l2 or type_dist is TypeNorm.intersection_over_union:
+    if type_dist is TypeNorm.l2:
         return LA.norm((gold_corners - corners).flatten(), ord=2)
+    if type_dist is TypeNorm.intersection_over_union:
+        poly1 = gold_corners.astype(np.float32)
+        poly2 = corners.astype(np.float32)
+        ret, inter_poly = cv.intersectConvexConvex(poly1, poly2)
+        area_inter = ret if isinstance(ret, float) else cv.contourArea(inter_poly)
+        area1 = cv.contourArea(poly1)
+        area2 = cv.contourArea(poly2)
+        union = area1 + area2 - area_inter
+        return (area_inter / union) if union > 0 else 0.0
     if type_dist is TypeNorm.l_inf:
         return LA.norm((gold_corners - corners).flatten(), ord=np.inf)
     raise TypeError("this TypeNorm isn't supported")
@@ -73,14 +82,6 @@ def get_synthetic_rt(yaw, pitch, distance):
     tvec = np.array([[0], [0], [distance]])
     return rvec, tvec
 
-
-def get_coord(num_rows, num_cols, start_x=0, start_y=0):
-    i, j = np.ogrid[:num_rows, :num_cols]
-    v = np.empty((num_rows, num_cols, 2), dtype=np.float32)
-    v[..., 0] = j + start_x
-    v[..., 1] = i + start_y
-    v.shape = (1, -1, 2)
-    return v
 
 
 class TransformObject:
@@ -124,6 +125,7 @@ class PerspectiveTransform(TransformObject):
         obj_points[:, -1:] = 0.
 
         corners, _ = cv.projectPoints(obj_points, rvec, tvec, camera_matrix, np.zeros((5, 1), dtype=np.float64))
+        corners = corners.reshape(-1, 2).astype(np.float32)
         self.transformation = cv.getPerspectiveTransform(original_corners, corners)
 
     def transform_image(self, image):
@@ -888,7 +890,8 @@ def main():
     configuration = args.configuration
     if configuration in ("generate", "generate_run"):
         generate_dataset(args, synthetic_object)
-        return
+        if configuration == "generate":
+            return
     elif configuration == "show":
         file = args.d1 if args.d1.endswith('.json') else args.d1 + '.json'
         distances1 = read_distances(os.path.join(dataset_path, file))
