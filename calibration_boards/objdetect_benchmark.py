@@ -459,7 +459,7 @@ class ArucoChecker(Checker):
         detected = {}
         if marker_ids is not None and len(marker_ids) > 0:
             for marker_id, marker in zip(marker_ids, marker_corners):
-                detected[int(marker_id)] = marker.reshape(4, 2)
+                detected[int(marker_id[0])] = marker.reshape(4, 2)
         max_error = get_max_error(accuracy_threshold, type_dist)
         distances = np.full(len(gold_ids), max_error)
         for i, gold_id in enumerate(gold_ids):
@@ -554,7 +554,7 @@ class CharucoChecker(Checker):
         detected = {}
         if charuco_ids is not None and len(charuco_ids) > 0:
             for charuco_id, charuco_corner in zip(charuco_ids, charuco_corners):
-                detected[int(charuco_id)] = charuco_corner
+                detected[int(charuco_id[0])] = charuco_corner
         max_error = get_max_error(self.accuracy_threshold, self.type_dist)
         total_count = len(gold_corners)
         distances = np.full(total_count, max_error)
