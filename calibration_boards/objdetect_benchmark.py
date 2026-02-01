@@ -45,18 +45,27 @@ TypeNorm = Enum('TypeNorm', 'l1 l2 l_inf intersection_over_union')
 def get_norm(gold_corners, corners, type_dist):
     if type_dist is TypeNorm.l1:
         return LA.norm((gold_corners - corners).flatten(), ord=1)
-    if type_dist is TypeNorm.l2 or type_dist is TypeNorm.intersection_over_union:
+    if type_dist is TypeNorm.l2:
         return LA.norm((gold_corners - corners).flatten(), ord=2)
+    if type_dist is TypeNorm.intersection_over_union:
+        poly1 = gold_corners.astype(np.float32)
+        poly2 = corners.astype(np.float32)
+        ret, inter_poly = cv.intersectConvexConvex(poly1, poly2)
+        area_inter = ret if isinstance(ret, float) else cv.contourArea(inter_poly)
+        area1 = cv.contourArea(poly1)
+        area2 = cv.contourArea(poly2)
+        union = area1 + area2 - area_inter
+        return (area_inter / union) if union > 0 else 0.0
     if type_dist is TypeNorm.l_inf:
         return LA.norm((gold_corners - corners).flatten(), ord=np.inf)
     raise TypeError("this TypeNorm isn't supported")
 
 
 def get_max_error(accuracy_threshold, type_dist):
-    if type_dist is TypeNorm.l1 or TypeNorm.l2 or TypeNorm.l3 or TypeNorm.l_inf:
-        return accuracy_threshold
+    if type_dist in (TypeNorm.l1, TypeNorm.l2, TypeNorm.l_inf):
+        return accuracy_threshold 
     if type_dist is TypeNorm.intersection_over_union:
-        return 1
+        return 1.0
     raise TypeError("this TypeNorm isn't supported")
 
 
@@ -74,18 +83,10 @@ def get_synthetic_rt(yaw, pitch, distance):
     return rvec, tvec
 
 
-def get_coord(num_rows, num_cols, start_x=0, start_y=0):
-    i, j = np.ogrid[:num_rows, :num_cols]
-    v = np.empty((num_rows, num_cols, 2), dtype=np.float32)
-    v[..., 0] = j + start_y
-    v[..., 1] = i + start_x
-    v.shape = (1, -1, 2)
-    return v
-
 
 class TransformObject:
     def __init__(self):
-        self.name = "none"
+        self.name = ""
 
     def transform_image(self, image):
         return image
@@ -124,6 +125,7 @@ class PerspectiveTransform(TransformObject):
         obj_points[:, -1:] = 0.
 
         corners, _ = cv.projectPoints(obj_points, rvec, tvec, camera_matrix, np.zeros((5, 1), dtype=np.float64))
+        corners = corners.reshape(-1, 2).astype(np.float32)
         self.transformation = cv.getPerspectiveTransform(original_corners, corners)
 
     def transform_image(self, image):
@@ -825,7 +827,7 @@ def main():
     parser.add_argument("--board_y", help="input board y size", default="6", action="store", dest="board_y", type=int)
     parser.add_argument("--rel_center_x", help="the relative x-axis location of the center of the board in the image",
                         default=".5", action="store", dest="rel_center_x", type=float)
-    parser.add_argument("--rel_center_y", help="the relative x-axis location of the center of the board in the image",
+    parser.add_argument("--rel_center_y", help="the relative y-axis location of the center of the board in the image",
                         default=".5", action="store", dest="rel_center_y", type=float)
     parser.add_argument("--metric", help="Metric for distance between result and gold", default="l_inf", action="store",
                         dest="metric", choices=['l1', 'l2', 'l_inf', 'intersection_over_union'], type=str)
@@ -886,12 +888,13 @@ def main():
 
     folder_name = "report_" + get_time()
     configuration = args.configuration
-    if configuration == "generate" or configuration == "generate_run":
+    if configuration in ("generate", "generate_run"):
         generate_dataset(args, synthetic_object)
         if configuration == "generate":
             return
     elif configuration == "show":
-        distances1 = read_distances(dataset_path+'/'+args.d1)
+        file = args.d1 if args.d1.endswith('.json') else args.d1 + '.json'
+        distances1 = read_distances(os.path.join(dataset_path, file))
         distances3 = distances1
         if args.d2 != '':
             distances2 = read_distances(dataset_path + '/' + args.d2)
